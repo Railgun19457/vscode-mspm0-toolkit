@@ -1,0 +1,548 @@
+import * as vscode from 'vscode';
+import {
+	ActionAvailability,
+	ActionId,
+	DEFAULT_PLUGIN_SETTINGS,
+	DEFAULT_TARGET,
+	PluginSettings,
+	PROBE_LABELS,
+	ProbeType,
+	SidebarPage,
+	SidebarState,
+	TargetConfig,
+	ToolKey,
+	TOOL_LABELS,
+} from '../../model/types';
+import { BuildService } from '../../services/buildService';
+import { DebugService } from '../../services/debugService';
+import { DeviceRegistry } from '../../services/deviceRegistry';
+import { ProjectService } from '../../services/projectService';
+import { ToolPathService } from '../../services/toolPathService';
+import { ToolchainDetector } from '../../services/toolchainDetector';
+import { logError, logInfo, logSection } from '../output';
+import { HostToWebview, WebviewToHost } from './messages';
+import { getSidebarHtml } from './sidebarHtml';
+import { StatusBarController } from '../statusBar';
+import { SerialService } from '../../services/serialService';
+
+export class SidebarProvider implements vscode.WebviewViewProvider {
+	public static readonly viewType = 'mspm0.sidebar.panel';
+
+	private view?: vscode.WebviewView;
+	private targetDraft: TargetConfig = { ...DEFAULT_TARGET };
+	private busyAction?: string;
+	private lastMessage?: string;
+	private lastMessageLevel?: 'info' | 'success' | 'error';
+	private doctorCache?: SidebarState['doctor'];
+	private healthCache?: SidebarState['health'];
+	private page: SidebarPage = 'console';
+
+	constructor(
+		private readonly context: vscode.ExtensionContext,
+		private readonly toolPaths: ToolPathService,
+		private readonly detector: ToolchainDetector,
+		private readonly projects: ProjectService,
+		private readonly devices: DeviceRegistry,
+		private readonly build: BuildService,
+		private readonly debug: DebugService,
+		private readonly statusBar?: StatusBarController
+	) {
+		const cfgDevice = vscode.workspace.getConfiguration('mspm0').get<string>('defaultDevice');
+		if (cfgDevice) {
+			this.targetDraft.device = cfgDevice;
+		}
+		const cfgProbe = vscode.workspace.getConfiguration('mspm0').get<string>('defaultProbe');
+		if (cfgProbe === 'jlink' || cfgProbe === 'openocd' || cfgProbe === 'xds110' || cfgProbe === 'cmsis-dap') {
+			this.targetDraft.probe = cfgProbe as ProbeType;
+		}
+	}
+
+	resolveWebviewView(
+		webviewView: vscode.WebviewView,
+		_context: vscode.WebviewViewResolveContext,
+		_token: vscode.CancellationToken
+	): void {
+		this.view = webviewView;
+		webviewView.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [this.context.extensionUri],
+		};
+		const nonce = getNonce();
+		webviewView.webview.html = getSidebarHtml(webviewView.webview, nonce);
+		webviewView.webview.onDidReceiveMessage(async (msg: WebviewToHost) => {
+			try {
+				await this.onMessage(msg);
+			} catch (err) {
+				const text = err instanceof Error ? err.message : String(err);
+				logError(text);
+				this.setMessage(text, 'error');
+				await this.pushState();
+			}
+		});
+		void this.refreshDoctorAndPush();
+	}
+
+	async refreshDoctorAndPush(): Promise<void> {
+		const paths = this.toolPaths.getPaths();
+		this.doctorCache = await this.detector.inspect(paths);
+		await this.pushState();
+	}
+
+	async pushState(): Promise<void> {
+		const state = this.buildState();
+		this.statusBar?.update(state.project, state.doctor);
+		if (!this.view) {
+			return;
+		}
+		const msg: HostToWebview = { type: 'state', payload: state };
+		await this.view.webview.postMessage(msg);
+	}
+
+	private buildState(): SidebarState {
+		const project = this.projects.getState();
+		if (project.config) {
+			this.targetDraft = {
+				device: project.config.device,
+				probe: project.config.probe,
+				interface: project.config.interface,
+				speed: project.config.speed,
+				target: project.config.target,
+				buildDir: project.config.buildDir,
+				syscfgFile: project.config.syscfgFile,
+				executable: project.config.executable,
+			};
+		}
+
+		const tools = this.toolPaths.getPaths();
+		const doctor = this.doctorCache;
+		const toolOk = (key: ToolKey) => doctor?.tools.find((t) => t.key === key)?.status === 'ok';
+		const initialized = project.initialized;
+		const hasWs = !!this.projects.getWorkspaceRoot();
+
+		const device = this.devices.get(this.targetDraft.device);
+		const health = this.healthCache ?? this.projects.checkHealth(project.root, device);
+		this.healthCache = health;
+		const folders = this.projects.listWorkspaceFolders();
+
+		const probe = this.targetDraft.probe;
+		const probeReady =
+			probe === 'jlink'
+				? toolOk('jlink')
+				: toolOk('openocd');
+		const actions: ActionAvailability = {
+			initProject: hasWs && !this.busyAction,
+			syncConfig: hasWs && initialized && !this.busyAction,
+			build: hasWs && initialized && toolOk('gcc') && toolOk('make') && toolOk('sdk') && !this.busyAction,
+			clean: hasWs && initialized && toolOk('make') && !this.busyAction,
+			flash: hasWs && initialized && probeReady && toolOk('make') && !this.busyAction,
+			syscfgGui: hasWs && initialized && toolOk('sysconfig') && toolOk('sdk') && !this.busyAction,
+			syscfgGen: hasWs && initialized && toolOk('sysconfig') && toolOk('sdk') && toolOk('make') && !this.busyAction,
+			debug: hasWs && initialized && toolOk('gcc') && probeReady && !this.busyAction,
+			healthCheck: hasWs && !this.busyAction,
+			createProject: !this.busyAction,
+			openSerial: !this.busyAction,
+			forceDetect: !this.busyAction,
+		};
+
+
+		return {
+			page: this.page,
+			settings: this.readPluginSettings(),
+			workspaceFolder: this.projects.getWorkspaceRoot(),
+			workspaceFolders: folders,
+			project,
+			health,
+			tools,
+			doctor,
+			target: this.targetDraft,
+			devices: this.devices.list(),
+			probes: (Object.keys(PROBE_LABELS) as ProbeType[]).map((id) => ({
+				id,
+				label: PROBE_LABELS[id],
+			})),
+			actions,
+			busyAction: this.busyAction,
+			lastMessage: this.lastMessage,
+			lastMessageLevel: this.lastMessageLevel,
+		};
+	}
+
+	private setMessage(message: string, level: 'info' | 'success' | 'error' = 'info'): void {
+		this.lastMessage = message;
+		this.lastMessageLevel = level;
+	}
+
+	private async onMessage(msg: WebviewToHost): Promise<void> {
+		switch (msg.type) {
+			case 'ready':
+				await this.refreshDoctorAndPush();
+				return;
+			case 'setPage':
+				this.page = msg.payload.page;
+				await this.pushState();
+				return;
+			case 'setPluginSetting':
+				await this.handlePluginSetting(msg.payload.key, msg.payload.value);
+				return;
+			case 'autoDetect':
+				await this.handleAutoDetect();
+				return;
+			case 'doctor':
+				await this.refreshDoctorAndPush();
+				this.setMessage('检测完成', 'info');
+				await this.pushState();
+				return;
+			case 'setToolPath':
+				await this.toolPaths.setPath(msg.payload.key, msg.payload.path, msg.payload.scope ?? this.toolPaths.getDefaultScope());
+				await this.refreshDoctorAndPush();
+				return;
+			case 'browseToolPath':
+				await this.handleBrowse(msg.payload.key);
+				return;
+			case 'setTargetConfig':
+				await this.handleTargetConfig(msg.payload);
+				return;
+			case 'setWorkspaceFolder':
+				this.projects.setWorkspaceRoot(msg.payload.path);
+				this.healthCache = undefined;
+				await this.refreshDoctorAndPush();
+				this.setMessage('已切换工作区文件夹', 'info');
+				await this.pushState();
+				return;
+			case 'healthCheck':
+				await this.handleHealthCheck();
+				return;
+			case 'createProject':
+				await this.handleCreateProject();
+				return;
+			case 'forceDetect':
+				await this.handleAutoDetect(true);
+				return;
+			case 'openSerial':
+				await this.handleOpenSerial();
+				return;
+			case 'initProject':
+				await this.handleInit();
+				return;
+			case 'syncConfig':
+				await this.handleSync();
+				return;
+			case 'runAction':
+				await this.handleAction(msg.payload.action);
+				return;
+			case 'setProbe':
+				await this.handleTargetConfig({ probe: msg.payload.probe });
+				return;
+		}
+	}
+
+	private async handleAutoDetect(force = false): Promise<void> {
+		this.busyAction = 'autoDetect';
+		await this.pushState();
+		logSection('Auto Detect Tools');
+		const detected = await this.toolPaths.autoDetect();
+		const applied = await this.toolPaths.applyDetected(detected, force);
+		logInfo(JSON.stringify(applied, null, 2));
+		this.busyAction = undefined;
+		await this.refreshDoctorAndPush();
+		const filled = Object.values(applied).filter(Boolean).length;
+		this.setMessage(`自动探测完成，已填充 ${filled} 项（${force ? '强制覆盖' : '不覆盖已有配置'}）`, 'success');
+		await this.pushState();
+	}
+
+	private async handleBrowse(key: ToolKey): Promise<void> {
+		const picked = await vscode.window.showOpenDialog({
+			canSelectFiles: false,
+			canSelectFolders: true,
+			canSelectMany: false,
+			openLabel: `选择 ${TOOL_LABELS[key]} 目录`,
+		});
+		if (!picked?.[0]) {
+			return;
+		}
+		await this.toolPaths.setPath(key, picked[0].fsPath, this.toolPaths.getDefaultScope());
+		await this.refreshDoctorAndPush();
+		this.setMessage(`已更新 ${TOOL_LABELS[key]}`, 'success');
+		await this.pushState();
+	}
+
+	private async handleTargetConfig(partial: Partial<TargetConfig>): Promise<void> {
+		if (partial.device) {
+			const raw = String(partial.device).trim();
+			const normalized = raw.toUpperCase();
+			const hit =
+				this.devices.get(raw) ||
+				this.devices.get(normalized) ||
+				this.devices.list().find((d) => d.id.toUpperCase() === normalized) ||
+				this.devices.list().find((d) => d.id.toUpperCase().replace(/^MSPM0/, '') === normalized.replace(/^MSPM0/, ''));
+			if (!hit) {
+				this.setMessage(`未知芯片型号: ${raw}（可在输入框筛选后从列表选择）`, 'error');
+				await this.pushState();
+				return;
+			}
+			partial = { ...partial, device: hit.id };
+		}
+
+		this.targetDraft = { ...this.targetDraft, ...partial };
+		if (this.projects.isInitialized()) {
+			await this.projects.updateTargetConfig(partial);
+			// Keep generated configs in sync for device/probe changes
+			if (partial.device || partial.probe || partial.interface || partial.speed) {
+				await this.projects.syncConfig(this.toolPaths.getPaths());
+			}
+		}
+		if (partial.device) {
+			this.setMessage(`已选择芯片: ${partial.device}`, 'success');
+		}
+		await this.pushState();
+	}
+
+
+
+	private async handleCreateProject(): Promise<void> {
+		const folderUri = await vscode.window.showOpenDialog({
+			canSelectFiles: false,
+			canSelectFolders: true,
+			canSelectMany: false,
+			openLabel: '选择新建工程父目录',
+		});
+		if (!folderUri?.[0]) {
+			return;
+		}
+		const name = await vscode.window.showInputBox({
+			prompt: '工程名称',
+			value: 'mspm0_app',
+			validateInput: (v) => (!v || /[<>:"/\\|?*]/.test(v) ? '名称无效' : undefined),
+		});
+		if (!name) {
+			return;
+		}
+		const pathMod = await import('path');
+		const fsMod = await import('fs');
+		const targetRoot = pathMod.join(folderUri[0].fsPath, name);
+		if (fsMod.existsSync(targetRoot) && fsMod.readdirSync(targetRoot).length) {
+			const ok = await vscode.window.showWarningMessage(
+				`目录非空，仍要初始化吗？\n${targetRoot}`,
+				{ modal: true },
+				'继续'
+			);
+			if (ok !== '继续') {
+				return;
+			}
+		}
+		fsMod.mkdirSync(targetRoot, { recursive: true });
+
+		this.busyAction = 'createProject';
+		await this.pushState();
+		try {
+			await this.projects.initProject(this.targetDraft, this.toolPaths.getPaths(), targetRoot);
+			this.healthCache = undefined;
+			const open = await vscode.window.showInformationMessage(
+				`工程已创建: ${targetRoot}`,
+				'打开文件夹'
+			);
+			if (open === '打开文件夹') {
+				await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(targetRoot), true);
+			}
+			this.setMessage(`新建工程完成: ${targetRoot}`, 'success');
+		} finally {
+			this.busyAction = undefined;
+			await this.refreshDoctorAndPush();
+		}
+	}
+
+	private async handleOpenSerial(): Promise<void> {
+		const serial = new SerialService(this.context);
+		const result = await serial.open();
+		if (result.ok) {
+			this.setMessage(result.message, 'success');
+			await this.pushState();
+			return;
+		}
+		if (result.canInstall) {
+			await serial.promptInstallOrOpen();
+			this.setMessage(result.message, 'error');
+			await this.pushState();
+			return;
+		}
+		this.setMessage(result.message, 'error');
+		await this.pushState();
+	}
+
+	private async handleHealthCheck(): Promise<void> {
+		const root = this.projects.getWorkspaceRoot();
+		const device = this.devices.get(this.targetDraft.device);
+		this.healthCache = this.projects.checkHealth(root, device);
+		const bad = this.healthCache.issues.filter((i) => i.level === 'error').length;
+		const warn = this.healthCache.issues.filter((i) => i.level === 'warn').length;
+		if (this.healthCache.ok) {
+			this.setMessage('工程健康检查通过', 'success');
+		} else {
+			this.setMessage(`工程健康检查: ${bad} error, ${warn} warn`, 'error');
+		}
+		await this.pushState();
+	}
+
+	private async handleInit(): Promise<void> {
+		const root = this.projects.getWorkspaceRoot();
+		if (!root) {
+			throw new Error('请先打开一个工作区文件夹');
+		}
+		const already = this.projects.isInitialized(root);
+		const pick = await vscode.window.showWarningMessage(
+			already
+				? `将在已初始化工程上补齐缺失文件:
+${root}`
+				: `将初始化 MSPM0 工程到:
+${root}`,
+			{ modal: true },
+			'继续',
+			'取消'
+		);
+		if (pick !== '继续') {
+			this.setMessage('已取消初始化', 'info');
+			await this.pushState();
+			return;
+		}
+
+		this.busyAction = 'initProject';
+		await this.pushState();
+		try {
+			await this.projects.initProject(this.targetDraft, this.toolPaths.getPaths(), root);
+			this.healthCache = undefined;
+			this.setMessage(`工程初始化完成: ${root}`, 'success');
+			vscode.window.showInformationMessage(`MSPM0 工程已初始化: ${root}`);
+		} finally {
+			this.busyAction = undefined;
+			await this.refreshDoctorAndPush();
+		}
+	}
+
+	private async handleSync(): Promise<void> {
+		this.busyAction = 'syncConfig';
+		await this.pushState();
+		try {
+			await this.projects.syncConfig(this.toolPaths.getPaths());
+			this.setMessage('配置已同步', 'success');
+		} finally {
+			this.busyAction = undefined;
+			await this.pushState();
+		}
+	}
+
+	private async handleAction(action: ActionId): Promise<void> {
+		const root = this.projects.getWorkspaceRoot();
+		if (!root) {
+			throw new Error('请先打开工作区文件夹');
+		}
+		if (!this.projects.isInitialized(root)) {
+			throw new Error('请先初始化工程');
+		}
+		const tools = this.toolPaths.getPaths();
+		const project = this.projects.readConfig(root);
+		if (!project) {
+			throw new Error('无法读取工程配置');
+		}
+
+		this.busyAction = action;
+		await this.pushState();
+		try {
+			const settings = this.readPluginSettings();
+			const jobs = settings.buildJobs;
+			switch (action) {
+				case 'build':
+					if (settings.autoSyscfgOnBuild) {
+						await this.build.syscfgGenerate(root, tools);
+					}
+					await this.build.build(root, tools, jobs);
+					this.setMessage(settings.autoSyscfgOnBuild ? 'SysConfig + 构建完成' : '构建完成', 'success');
+					break;
+				case 'clean':
+					await this.build.clean(root, tools);
+					this.setMessage('清理完成', 'success');
+					break;
+				case 'flash':
+					if (settings.buildBeforeFlash) {
+						if (settings.autoSyscfgOnBuild) {
+							await this.build.syscfgGenerate(root, tools);
+						}
+					}
+					await this.build.flash(root, tools, settings.buildBeforeFlash);
+					this.setMessage(settings.buildBeforeFlash ? '构建并烧录完成' : '烧录完成（未重建）', 'success');
+					break;
+				case 'syscfgGui':
+					await this.build.syscfgGui(root, tools, tools.sdk, project.syscfgFile);
+					this.setMessage('已打开 SysConfig GUI', 'success');
+					break;
+				case 'syscfgGen':
+					await this.build.syscfgGenerate(root, tools);
+					this.setMessage('SysConfig 代码生成完成', 'success');
+					break;
+				case 'debug':
+					if (settings.buildBeforeDebug) {
+						if (settings.autoSyscfgOnBuild) {
+							await this.build.syscfgGenerate(root, tools);
+						}
+						await this.build.build(root, tools, jobs);
+					}
+					await this.debug.start(undefined, project.probe, root);
+					this.setMessage(settings.buildBeforeDebug ? '构建后已启动调试' : '已启动调试', 'success');
+					break;
+			}
+		} catch (err) {
+			const text = err instanceof Error ? err.message : String(err);
+			this.setMessage(text, 'error');
+			throw err;
+		} finally {
+			this.busyAction = undefined;
+			await this.pushState();
+		}
+	}
+
+private readPluginSettings(): PluginSettings {
+const cfg = vscode.workspace.getConfiguration('mspm0');
+const scope = cfg.get<string>('toolPathScope', DEFAULT_PLUGIN_SETTINGS.toolPathScope);
+return {
+buildJobs: cfg.get<number>('buildJobs', DEFAULT_PLUGIN_SETTINGS.buildJobs),
+autoDetectOnStartup: cfg.get<boolean>('autoDetectOnStartup', DEFAULT_PLUGIN_SETTINGS.autoDetectOnStartup),
+toolPathScope: scope === 'workspace' ? 'workspace' : 'user',
+serialBaudRate: cfg.get<number>('serialBaudRate', DEFAULT_PLUGIN_SETTINGS.serialBaudRate),
+defaultDevice: cfg.get<string>('defaultDevice', DEFAULT_PLUGIN_SETTINGS.defaultDevice),
+defaultProbe: cfg.get<string>('defaultProbe', DEFAULT_PLUGIN_SETTINGS.defaultProbe),
+autoSyscfgOnBuild: cfg.get<boolean>('autoSyscfgOnBuild', DEFAULT_PLUGIN_SETTINGS.autoSyscfgOnBuild),
+buildBeforeFlash: cfg.get<boolean>('buildBeforeFlash', DEFAULT_PLUGIN_SETTINGS.buildBeforeFlash),
+buildBeforeDebug: cfg.get<boolean>('buildBeforeDebug', DEFAULT_PLUGIN_SETTINGS.buildBeforeDebug),
+};
+}
+
+private async handlePluginSetting(key: keyof PluginSettings, value: string | number | boolean): Promise<void> {
+const cfg = vscode.workspace.getConfiguration('mspm0');
+const target =
+this.toolPaths.getDefaultScope() === 'workspace'
+? vscode.ConfigurationTarget.Workspace
+: vscode.ConfigurationTarget.Global;
+await cfg.update(String(key), value, target);
+
+if (key === 'defaultDevice' && typeof value === 'string' && value) {
+this.targetDraft.device = value;
+}
+if (key === 'defaultProbe' && typeof value === 'string') {
+if (value === 'jlink' || value === 'openocd' || value === 'xds110' || value === 'cmsis-dap') {
+this.targetDraft.probe = value;
+}
+}
+
+this.setMessage(`已更新设置: ${String(key)}`, 'success');
+await this.refreshDoctorAndPush();
+}
+
+}
+
+function getNonce(): string {
+	const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+	let id = '';
+	for (let i = 0; i < 32; i++) {
+		id += chars.charAt(Math.floor(Math.random() * chars.length));
+	}
+	return id;
+}

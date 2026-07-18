@@ -1,0 +1,474 @@
+{
+  "name": "mspm0-toolkit",
+  "displayName": "MSPM0 Toolkit",
+  "description": "TI MSPM0 full-workflow toolkit for VS Code: sidebar console, toolchain setup, project init, build, flash, debug, SysConfig",
+  "version": "0.6.3",
+  "publisher": "Railgun19457",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers",
+    "Other"
+  ],
+  "keywords": [
+    "MSPM0",
+    "TI",
+    "embedded",
+    "J-Link",
+    "OpenOCD",
+    "XDS110",
+    "CMSIS-DAP",
+    "SysConfig",
+    "Cortex-Debug"
+  ],
+  "activationEvents": [
+    "onView:mspm0.sidebar.panel",
+    "workspaceContains:**/mspm0.project.json",
+    "onCommand:mspm0.openSidebar",
+    "onCommand:mspm0.doctor",
+    "onCommand:mspm0.autoDetectTools",
+    "onCommand:mspm0.initProject",
+    "onCommand:mspm0.syncConfig",
+    "onCommand:mspm0.build",
+    "onCommand:mspm0.clean",
+    "onCommand:mspm0.flash",
+    "onCommand:mspm0.debug",
+    "onCommand:mspm0.sysconfig.openGui",
+    "onCommand:mspm0.sysconfig.generate",
+    "onCommand:mspm0.healthCheck",
+    "onCommand:mspm0.createProject",
+    "onCommand:mspm0.openSerial",
+    "onCommand:mspm0.forceDetectTools"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mspm0",
+          "title": "MSPM0",
+          "icon": "media/mspm0-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "mspm0": [
+        {
+          "type": "webview",
+          "id": "mspm0.sidebar.panel",
+          "name": "控制台"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "mspm0.openSidebar",
+        "title": "打开侧边栏",
+        "category": "MSPM0",
+        "icon": "$(layout-sidebar-left)"
+      },
+      {
+        "command": "mspm0.doctor",
+        "title": "环境检测",
+        "category": "MSPM0",
+        "icon": "$(heartbeat)"
+      },
+      {
+        "command": "mspm0.autoDetectTools",
+        "title": "自动探测工具路径",
+        "category": "MSPM0",
+        "icon": "$(search)"
+      },
+      {
+        "command": "mspm0.initProject",
+        "title": "初始化工程",
+        "category": "MSPM0",
+        "icon": "$(repo-create)"
+      },
+      {
+        "command": "mspm0.syncConfig",
+        "title": "同步配置",
+        "category": "MSPM0",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "mspm0.build",
+        "title": "构建",
+        "category": "MSPM0",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "mspm0.clean",
+        "title": "清理",
+        "category": "MSPM0",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "mspm0.flash",
+        "title": "烧录",
+        "category": "MSPM0",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "mspm0.debug",
+        "title": "调试",
+        "category": "MSPM0",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "mspm0.sysconfig.openGui",
+        "title": "SysConfig",
+        "category": "MSPM0",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "mspm0.sysconfig.generate",
+        "title": "生成配置",
+        "category": "MSPM0",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "mspm0.healthCheck",
+        "title": "健康检查",
+        "category": "MSPM0",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "mspm0.createProject",
+        "title": "新建工程",
+        "category": "MSPM0",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "mspm0.openSerial",
+        "title": "串口",
+        "category": "MSPM0",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "mspm0.forceDetectTools",
+        "title": "强制覆盖探测",
+        "category": "MSPM0",
+        "icon": "$(refresh)"
+      }
+    ],
+    "configuration": {
+      "title": "MSPM0 Toolkit",
+      "properties": {
+        "mspm0.gccPath": {
+          "type": "string",
+          "default": "",
+          "description": "Arm GNU Toolchain 根目录（包含 bin/arm-none-eabi-gcc）"
+        },
+        "mspm0.sdkPath": {
+          "type": "string",
+          "default": "",
+          "description": "MSPM0 SDK 根目录"
+        },
+        "mspm0.sysconfigPath": {
+          "type": "string",
+          "default": "",
+          "description": "SysConfig 安装目录"
+        },
+        "mspm0.jlinkPath": {
+          "type": "string",
+          "default": "",
+          "description": "J-Link 安装目录"
+        },
+        "mspm0.makePath": {
+          "type": "string",
+          "default": "",
+          "description": "make.exe 所在目录"
+        },
+        "mspm0.defaultDevice": {
+          "type": "string",
+          "default": "MSPM0G3507",
+          "description": "默认芯片型号（见 devices/devices.json，覆盖 MSPM0L/G/C/H/S 全系列）"
+        },
+        "mspm0.defaultProbe": {
+          "type": "string",
+          "default": "jlink",
+          "enum": [
+            "jlink",
+            "openocd",
+            "xds110",
+            "cmsis-dap"
+          ],
+          "enumDescriptions": [
+            "SEGGER J-Link",
+            "OpenOCD generic",
+            "TI XDS110 via OpenOCD",
+            "CMSIS-DAP via OpenOCD"
+          ],
+          "description": "默认仿真器类型"
+        },
+        "mspm0.buildJobs": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "description": "并行编译任务数 (-j)"
+        },
+        "mspm0.autoDetectOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "启动时若路径为空则自动探测"
+        },
+        "mspm0.toolPathScope": {
+          "type": "string",
+          "default": "user",
+          "enum": [
+            "user",
+            "workspace"
+          ],
+          "description": "侧边栏写入工具路径的配置作用域"
+        },
+        "mspm0.openocdPath": {
+          "type": "string",
+          "default": "",
+          "description": "OpenOCD bin 目录（包含 openocd.exe；用于 XDS110/CMSIS-DAP/OpenOCD 仿真器）"
+        },
+        "mspm0.serialBaudRate": {
+          "type": "number",
+          "default": 115200,
+          "description": "打开 Serial Monitor 时默认波特率"
+        },
+        "mspm0.autoSyscfgOnBuild": {
+          "type": "boolean",
+          "default": true,
+          "description": "构建前自动执行 SysConfig 生成配置（make syscfg）"
+        },
+        "mspm0.buildBeforeFlash": {
+          "type": "boolean",
+          "default": true,
+          "description": "烧录前自动构建（关闭则仅下载已有产物）"
+        },
+        "mspm0.buildBeforeDebug": {
+          "type": "boolean",
+          "default": true,
+          "description": "调试前自动构建（对应 launch preLaunchTask 语义的扩展侧行为）"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "mspm0.build",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b",
+        "when": "workspaceFolderCount > 0"
+      },
+      {
+        "command": "mspm0.clean",
+        "key": "ctrl+alt+shift+c",
+        "mac": "cmd+alt+shift+c",
+        "when": "workspaceFolderCount > 0"
+      },
+      {
+        "command": "mspm0.flash",
+        "key": "ctrl+alt+f",
+        "mac": "cmd+alt+f",
+        "when": "workspaceFolderCount > 0"
+      },
+      {
+        "command": "mspm0.debug",
+        "key": "ctrl+alt+d",
+        "mac": "cmd+alt+d",
+        "when": "workspaceFolderCount > 0"
+      },
+      {
+        "command": "mspm0.openSerial",
+        "key": "ctrl+alt+m",
+        "mac": "cmd+alt+m"
+      },
+      {
+        "command": "mspm0.sysconfig.openGui",
+        "key": "ctrl+alt+g",
+        "mac": "cmd+alt+g",
+        "when": "workspaceFolderCount > 0"
+      },
+      {
+        "command": "mspm0.openSidebar",
+        "key": "ctrl+alt+o",
+        "mac": "cmd+alt+o"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "mspm0.build",
+          "when": "view == mspm0.sidebar.panel",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mspm0.flash",
+          "when": "view == mspm0.sidebar.panel",
+          "group": "navigation@2"
+        },
+        {
+          "command": "mspm0.debug",
+          "when": "view == mspm0.sidebar.panel",
+          "group": "navigation@3"
+        },
+        {
+          "submenu": "mspm0.view.title",
+          "when": "view == mspm0.sidebar.panel",
+          "group": "navigation@4"
+        }
+      ],
+      "editor/title": [
+        {
+          "submenu": "mspm0.editor.title",
+          "when": "resourceLangId == c || resourceLangId == cpp || resourceFilename == Makefile || resourceFilename == mspm0.project.json || resourceExtname == .c || resourceExtname == .h || resourceExtname == .cpp || resourceExtname == .hpp || resourceExtname == .S || resourceExtname == .s || resourceExtname == .ld || resourceExtname == .lds",
+          "group": "navigation@10"
+        }
+      ],
+      "mspm0.editor.title": [
+        {
+          "command": "mspm0.build",
+          "group": "1_core@1",
+          "when": "resourceLangId == c || resourceLangId == cpp || resourceFilename == Makefile || resourceFilename == mspm0.project.json || resourceExtname == .c || resourceExtname == .h || resourceExtname == .cpp || resourceExtname == .hpp || resourceExtname == .S || resourceExtname == .s || resourceExtname == .ld || resourceExtname == .lds"
+        },
+        {
+          "command": "mspm0.flash",
+          "group": "1_core@2",
+          "when": "resourceLangId == c || resourceLangId == cpp || resourceFilename == Makefile || resourceFilename == mspm0.project.json || resourceExtname == .c || resourceExtname == .h || resourceExtname == .cpp || resourceExtname == .hpp || resourceExtname == .S || resourceExtname == .s || resourceExtname == .ld || resourceExtname == .lds"
+        },
+        {
+          "command": "mspm0.debug",
+          "group": "1_core@3",
+          "when": "resourceLangId == c || resourceLangId == cpp || resourceFilename == Makefile || resourceFilename == mspm0.project.json || resourceExtname == .c || resourceExtname == .h || resourceExtname == .cpp || resourceExtname == .hpp || resourceExtname == .S || resourceExtname == .s || resourceExtname == .ld || resourceExtname == .lds"
+        },
+        {
+          "command": "mspm0.clean",
+          "group": "1_core@4",
+          "when": "resourceLangId == c || resourceLangId == cpp || resourceFilename == Makefile || resourceFilename == mspm0.project.json || resourceExtname == .c || resourceExtname == .h || resourceExtname == .cpp || resourceExtname == .hpp || resourceExtname == .S || resourceExtname == .s || resourceExtname == .ld || resourceExtname == .lds"
+        },
+        {
+          "command": "mspm0.openSerial",
+          "group": "2_tools@1",
+          "when": "resourceLangId == c || resourceLangId == cpp || resourceFilename == Makefile || resourceFilename == mspm0.project.json || resourceExtname == .c || resourceExtname == .h || resourceExtname == .cpp || resourceExtname == .hpp || resourceExtname == .S || resourceExtname == .s || resourceExtname == .ld || resourceExtname == .lds"
+        },
+        {
+          "command": "mspm0.sysconfig.openGui",
+          "group": "2_tools@2",
+          "when": "resourceLangId == c || resourceLangId == cpp || resourceFilename == Makefile || resourceFilename == mspm0.project.json || resourceExtname == .c || resourceExtname == .h || resourceExtname == .cpp || resourceExtname == .hpp || resourceExtname == .S || resourceExtname == .s || resourceExtname == .ld || resourceExtname == .lds"
+        },
+        {
+          "command": "mspm0.sysconfig.generate",
+          "group": "2_tools@3",
+          "when": "resourceLangId == c || resourceLangId == cpp || resourceFilename == Makefile || resourceFilename == mspm0.project.json || resourceExtname == .c || resourceExtname == .h || resourceExtname == .cpp || resourceExtname == .hpp || resourceExtname == .S || resourceExtname == .s || resourceExtname == .ld || resourceExtname == .lds"
+        },
+        {
+          "command": "mspm0.syncConfig",
+          "group": "3_project@1",
+          "when": "resourceLangId == c || resourceLangId == cpp || resourceFilename == Makefile || resourceFilename == mspm0.project.json || resourceExtname == .c || resourceExtname == .h || resourceExtname == .cpp || resourceExtname == .hpp || resourceExtname == .S || resourceExtname == .s || resourceExtname == .ld || resourceExtname == .lds"
+        },
+        {
+          "command": "mspm0.healthCheck",
+          "group": "3_project@2",
+          "when": "resourceLangId == c || resourceLangId == cpp || resourceFilename == Makefile || resourceFilename == mspm0.project.json || resourceExtname == .c || resourceExtname == .h || resourceExtname == .cpp || resourceExtname == .hpp || resourceExtname == .S || resourceExtname == .s || resourceExtname == .ld || resourceExtname == .lds"
+        },
+        {
+          "command": "mspm0.openSidebar",
+          "group": "3_project@3",
+          "when": "resourceLangId == c || resourceLangId == cpp || resourceFilename == Makefile || resourceFilename == mspm0.project.json || resourceExtname == .c || resourceExtname == .h || resourceExtname == .cpp || resourceExtname == .hpp || resourceExtname == .S || resourceExtname == .s || resourceExtname == .ld || resourceExtname == .lds"
+        }
+      ],
+      "mspm0.view.title": [
+        {
+          "command": "mspm0.openSerial",
+          "group": "1_tools@1",
+          "when": "view == mspm0.sidebar.panel"
+        },
+        {
+          "command": "mspm0.clean",
+          "group": "1_tools@2",
+          "when": "view == mspm0.sidebar.panel"
+        },
+        {
+          "command": "mspm0.sysconfig.openGui",
+          "group": "1_tools@3",
+          "when": "view == mspm0.sidebar.panel"
+        },
+        {
+          "command": "mspm0.sysconfig.generate",
+          "group": "1_tools@4",
+          "when": "view == mspm0.sidebar.panel"
+        },
+        {
+          "command": "mspm0.syncConfig",
+          "group": "2_project@1",
+          "when": "view == mspm0.sidebar.panel"
+        },
+        {
+          "command": "mspm0.healthCheck",
+          "group": "2_project@2",
+          "when": "view == mspm0.sidebar.panel"
+        },
+        {
+          "command": "mspm0.doctor",
+          "group": "2_project@3",
+          "when": "view == mspm0.sidebar.panel"
+        }
+      ]
+    },
+    "submenus": [
+      {
+        "id": "mspm0.editor.title",
+        "label": "MSPM0",
+        "icon": "$(chip)"
+      },
+      {
+        "id": "mspm0.view.title",
+        "label": "MSPM0 更多操作",
+        "icon": "$(ellipsis)"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test",
+    "smoke": "node scripts/smoke_init_build.mjs",
+    "test:unit-compile": "npm run compile-tests",
+    "test:unit": "node scripts/run_unit_tests.cjs",
+    "verify": "npm run compile && npm run test:unit && npm run smoke"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "24.x",
+    "typescript-eslint": "^8.61.1",
+    "eslint": "^10.5.0",
+    "esbuild": "^0.28.1",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.8.3",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.0.0",
+    "mocha": "^11.7.1"
+  },
+  "overrides": {
+    "diff": "^8.0.4",
+    "serialize-javascript": "^7.0.6"
+  },
+  "icon": "media/mspm0-logo.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Railgun19457/vscode-mspm0-toolkit.git"
+  },
+  "homepage": "https://github.com/Railgun19457/vscode-mspm0-toolkit",
+  "bugs": {
+    "url": "https://github.com/Railgun19457/vscode-mspm0-toolkit/issues"
+  },
+  "license": "MIT"
+}

@@ -1,1 +1,24 @@
-dev/
+# dependencies & build
+node_modules/
+dist/
+out/
+
+# test / local tooling
+.vscode-test/
+.vscode-test.bak/
+.vscode-test.mjs
+**/.vscode-test.*
+
+# packages & logs
+*.vsix
+*.log
+*.map
+
+# temp scripts
+_*.py
+_tmp*
+tmp/
+
+# OS
+.DS_Store
+Thumbs.db
