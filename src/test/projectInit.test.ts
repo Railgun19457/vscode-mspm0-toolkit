@@ -49,7 +49,14 @@ suite('ProjectService.initProject', () => {
 		assert.ok(fs.existsSync(path.join(tmp, '.vscode', 'tasks.json')));
 		assert.ok(fs.existsSync(path.join(tmp, '.vscode', 'openocd.cfg')));
 		const toolpaths = fs.readFileSync(path.join(tmp, 'toolpaths.mk'), 'utf8');
-		assert.ok(toolpaths.includes('OPENOCD_BIN='));
+		assert.ok(toolpaths.includes('OPENOCD_BIN'));
+		const settings = JSON.parse(fs.readFileSync(path.join(tmp, '.vscode', 'settings.json'), 'utf8'));
+		assert.ok(String(settings['cortex-debug.armToolchainPath'] || '').includes('${config:mspm0.gccPath}'));
+		const launch = JSON.parse(fs.readFileSync(path.join(tmp, '.vscode', 'launch.json'), 'utf8'));
+		const dbg = launch.configurations.find((c: any) => c.name === 'Debug (J-Link)');
+		assert.ok(String(dbg?.gdbPath || '').includes('${config:mspm0.gccPath}'));
+		const mk = fs.readFileSync(path.join(tmp, 'Makefile'), 'utf8');
+		assert.ok(mk.includes('-include toolpaths.mk'));
 		const proj = JSON.parse(fs.readFileSync(path.join(tmp, 'mspm0.project.json'), 'utf8'));
 		assert.strictEqual(proj.device, 'MSPM0G3507');
 		assert.strictEqual(proj.version, 1);

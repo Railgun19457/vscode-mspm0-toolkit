@@ -19,7 +19,7 @@ import { DeviceRegistry } from '../../services/deviceRegistry';
 import { ProjectService } from '../../services/projectService';
 import { ToolPathService } from '../../services/toolPathService';
 import { ToolchainDetector } from '../../services/toolchainDetector';
-import { logError, logInfo, logSection } from '../output';
+import { logError, logInfo, logSection, revealOutput } from '../output';
 import { HostToWebview, WebviewToHost } from './messages';
 import { getSidebarHtml } from './sidebarHtml';
 import { StatusBarController } from '../statusBar';
@@ -76,6 +76,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				const text = err instanceof Error ? err.message : String(err);
 				logError(text);
 				this.setMessage(text, 'error');
+				this.statusBar?.setAction(text, 'error');
+				revealOutput('error');
 				await this.pushState();
 			}
 		});
@@ -238,6 +240,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
 	private async handleAutoDetect(force = false): Promise<void> {
 		this.busyAction = 'autoDetect';
+		this.statusBar?.setAction(force ? '强制探测工具…' : '探测工具中…', 'running');
 		await this.pushState();
 		logSection('Auto Detect Tools');
 		const detected = await this.toolPaths.autoDetect();
@@ -246,7 +249,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		this.busyAction = undefined;
 		await this.refreshDoctorAndPush();
 		const filled = Object.values(applied).filter(Boolean).length;
-		this.setMessage(`自动探测完成，已填充 ${filled} 项（${force ? '强制覆盖' : '不覆盖已有配置'}）`, 'success');
+		const msg = `自动探测完成，已填充 ${filled} 项（${force ? '强制覆盖' : '不覆盖已有配置'}）`;
+		this.setMessage(msg, 'success');
+		this.statusBar?.setAction(force ? '强制探测完成' : '工具探测完成', 'success');
 		await this.pushState();
 	}
 
@@ -356,16 +361,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		const result = await serial.open();
 		if (result.ok) {
 			this.setMessage(result.message, 'success');
+			this.statusBar?.setAction('串口已打开', 'success');
 			await this.pushState();
 			return;
 		}
 		if (result.canInstall) {
 			await serial.promptInstallOrOpen();
 			this.setMessage(result.message, 'error');
+			this.statusBar?.setAction('串口打开失败', 'error');
 			await this.pushState();
 			return;
 		}
 		this.setMessage(result.message, 'error');
+		this.statusBar?.setAction('串口打开失败', 'error');
 		await this.pushState();
 	}
 
@@ -377,8 +385,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		const warn = this.healthCache.issues.filter((i) => i.level === 'warn').length;
 		if (this.healthCache.ok) {
 			this.setMessage('工程健康检查通过', 'success');
+			this.statusBar?.setAction('健康检查通过', 'success');
 		} else {
-			this.setMessage(`工程健康检查: ${bad} error, ${warn} warn`, 'error');
+			const msg = `工程健康检查: ${bad} error, ${warn} warn`;
+			this.setMessage(msg, 'error');
+			this.statusBar?.setAction('健康检查有问题', 'error');
+			revealOutput('error');
 		}
 		await this.pushState();
 	}
@@ -406,11 +418,13 @@ ${root}`,
 		}
 
 		this.busyAction = 'initProject';
+		this.statusBar?.setAction('初始化工程…', 'running');
 		await this.pushState();
 		try {
 			await this.projects.initProject(this.targetDraft, this.toolPaths.getPaths(), root);
 			this.healthCache = undefined;
 			this.setMessage(`工程初始化完成: ${root}`, 'success');
+			this.statusBar?.setAction('工程已初始化', 'success');
 			vscode.window.showInformationMessage(`MSPM0 工程已初始化: ${root}`);
 		} finally {
 			this.busyAction = undefined;
@@ -420,10 +434,12 @@ ${root}`,
 
 	private async handleSync(): Promise<void> {
 		this.busyAction = 'syncConfig';
+		this.statusBar?.setAction('同步配置…', 'running');
 		await this.pushState();
 		try {
 			await this.projects.syncConfig(this.toolPaths.getPaths());
 			this.setMessage('配置已同步', 'success');
+			this.statusBar?.setAction('配置已同步', 'success');
 		} finally {
 			this.busyAction = undefined;
 			await this.pushState();
@@ -445,6 +461,21 @@ ${root}`,
 		}
 
 		this.busyAction = action;
+		const runningLabel =
+			action === 'build'
+				? '构建中…'
+				: action === 'clean'
+					? '清理中…'
+					: action === 'flash'
+						? '烧录中…'
+						: action === 'syscfgGui'
+							? '启动 SysConfig…'
+							: action === 'syscfgGen'
+								? '生成 SysConfig…'
+								: action === 'debug'
+									? '启动调试…'
+									: '执行中…';
+		this.statusBar?.setAction(runningLabel, 'running');
 		await this.pushState();
 		try {
 			const settings = this.readPluginSettings();
@@ -455,11 +486,16 @@ ${root}`,
 						await this.build.syscfgGenerate(root, tools);
 					}
 					await this.build.build(root, tools, jobs);
-					this.setMessage(settings.autoSyscfgOnBuild ? 'SysConfig + 构建完成' : '构建完成', 'success');
+					{
+						const msg = settings.autoSyscfgOnBuild ? 'SysConfig + 构建完成' : '构建完成';
+						this.setMessage(msg, 'success');
+						this.statusBar?.setAction(settings.autoSyscfgOnBuild ? '构建成功' : '构建成功', 'success');
+					}
 					break;
 				case 'clean':
 					await this.build.clean(root, tools);
 					this.setMessage('清理完成', 'success');
+					this.statusBar?.setAction('清理完成', 'success');
 					break;
 				case 'flash':
 					if (settings.buildBeforeFlash) {
@@ -468,15 +504,21 @@ ${root}`,
 						}
 					}
 					await this.build.flash(root, tools, settings.buildBeforeFlash);
-					this.setMessage(settings.buildBeforeFlash ? '构建并烧录完成' : '烧录完成（未重建）', 'success');
+					{
+						const msg = settings.buildBeforeFlash ? '构建并烧录完成' : '烧录完成（未重建）';
+						this.setMessage(msg, 'success');
+						this.statusBar?.setAction(settings.buildBeforeFlash ? '构建并烧录成功' : '烧录成功', 'success');
+					}
 					break;
 				case 'syscfgGui':
 					await this.build.syscfgGui(root, tools, tools.sdk, project.syscfgFile);
 					this.setMessage('已打开 SysConfig GUI', 'success');
+					this.statusBar?.setAction('SysConfig 已启动', 'success');
 					break;
 				case 'syscfgGen':
 					await this.build.syscfgGenerate(root, tools);
 					this.setMessage('SysConfig 代码生成完成', 'success');
+					this.statusBar?.setAction('SysConfig 生成成功', 'success');
 					break;
 				case 'debug':
 					if (settings.buildBeforeDebug) {
@@ -486,12 +528,18 @@ ${root}`,
 						await this.build.build(root, tools, jobs);
 					}
 					await this.debug.start(undefined, project.probe, root);
-					this.setMessage(settings.buildBeforeDebug ? '构建后已启动调试' : '已启动调试', 'success');
+					{
+						const msg = settings.buildBeforeDebug ? '构建后已启动调试' : '已启动调试';
+						this.setMessage(msg, 'success');
+						this.statusBar?.setAction('调试已启动', 'success');
+					}
 					break;
 			}
 		} catch (err) {
 			const text = err instanceof Error ? err.message : String(err);
 			this.setMessage(text, 'error');
+			this.statusBar?.setAction(text, 'error');
+			revealOutput('error');
 			throw err;
 		} finally {
 			this.busyAction = undefined;
@@ -499,43 +547,43 @@ ${root}`,
 		}
 	}
 
-private readPluginSettings(): PluginSettings {
-const cfg = vscode.workspace.getConfiguration('mspm0');
-const scope = cfg.get<string>('toolPathScope', DEFAULT_PLUGIN_SETTINGS.toolPathScope);
-return {
-buildJobs: cfg.get<number>('buildJobs', DEFAULT_PLUGIN_SETTINGS.buildJobs),
-autoDetectOnStartup: cfg.get<boolean>('autoDetectOnStartup', DEFAULT_PLUGIN_SETTINGS.autoDetectOnStartup),
-toolPathScope: scope === 'workspace' ? 'workspace' : 'user',
-serialBaudRate: cfg.get<number>('serialBaudRate', DEFAULT_PLUGIN_SETTINGS.serialBaudRate),
-defaultDevice: cfg.get<string>('defaultDevice', DEFAULT_PLUGIN_SETTINGS.defaultDevice),
-defaultProbe: cfg.get<string>('defaultProbe', DEFAULT_PLUGIN_SETTINGS.defaultProbe),
-autoSyscfgOnBuild: cfg.get<boolean>('autoSyscfgOnBuild', DEFAULT_PLUGIN_SETTINGS.autoSyscfgOnBuild),
-buildBeforeFlash: cfg.get<boolean>('buildBeforeFlash', DEFAULT_PLUGIN_SETTINGS.buildBeforeFlash),
-buildBeforeDebug: cfg.get<boolean>('buildBeforeDebug', DEFAULT_PLUGIN_SETTINGS.buildBeforeDebug),
-};
-}
+	private readPluginSettings(): PluginSettings {
+		const cfg = vscode.workspace.getConfiguration('mspm0');
+		const scope = cfg.get<string>('toolPathScope', DEFAULT_PLUGIN_SETTINGS.toolPathScope);
+		return {
+			buildJobs: cfg.get<number>('buildJobs', DEFAULT_PLUGIN_SETTINGS.buildJobs),
+			autoDetectOnStartup: cfg.get<boolean>('autoDetectOnStartup', DEFAULT_PLUGIN_SETTINGS.autoDetectOnStartup),
+			toolPathScope: scope === 'workspace' ? 'workspace' : 'user',
+			serialBaudRate: cfg.get<number>('serialBaudRate', DEFAULT_PLUGIN_SETTINGS.serialBaudRate),
+			defaultDevice: cfg.get<string>('defaultDevice', DEFAULT_PLUGIN_SETTINGS.defaultDevice),
+			defaultProbe: cfg.get<string>('defaultProbe', DEFAULT_PLUGIN_SETTINGS.defaultProbe),
+			autoSyscfgOnBuild: cfg.get<boolean>('autoSyscfgOnBuild', DEFAULT_PLUGIN_SETTINGS.autoSyscfgOnBuild),
+			buildBeforeFlash: cfg.get<boolean>('buildBeforeFlash', DEFAULT_PLUGIN_SETTINGS.buildBeforeFlash),
+			buildBeforeDebug: cfg.get<boolean>('buildBeforeDebug', DEFAULT_PLUGIN_SETTINGS.buildBeforeDebug),
+			openOutputOnError: cfg.get<boolean>('openOutputOnError', DEFAULT_PLUGIN_SETTINGS.openOutputOnError),
+		};
+	}
 
-private async handlePluginSetting(key: keyof PluginSettings, value: string | number | boolean): Promise<void> {
-const cfg = vscode.workspace.getConfiguration('mspm0');
-const target =
-this.toolPaths.getDefaultScope() === 'workspace'
-? vscode.ConfigurationTarget.Workspace
-: vscode.ConfigurationTarget.Global;
-await cfg.update(String(key), value, target);
+	private async handlePluginSetting(key: keyof PluginSettings, value: string | number | boolean): Promise<void> {
+		const cfg = vscode.workspace.getConfiguration('mspm0');
+		const target =
+			this.toolPaths.getDefaultScope() === 'workspace'
+				? vscode.ConfigurationTarget.Workspace
+				: vscode.ConfigurationTarget.Global;
+		await cfg.update(String(key), value, target);
 
-if (key === 'defaultDevice' && typeof value === 'string' && value) {
-this.targetDraft.device = value;
-}
-if (key === 'defaultProbe' && typeof value === 'string') {
-if (value === 'jlink' || value === 'openocd' || value === 'xds110' || value === 'cmsis-dap') {
-this.targetDraft.probe = value;
-}
-}
+		if (key === 'defaultDevice' && typeof value === 'string' && value) {
+			this.targetDraft.device = value;
+		}
+		if (key === 'defaultProbe' && typeof value === 'string') {
+			if (value === 'jlink' || value === 'openocd' || value === 'xds110' || value === 'cmsis-dap') {
+				this.targetDraft.probe = value;
+			}
+		}
 
-this.setMessage(`已更新设置: ${String(key)}`, 'success');
-await this.refreshDoctorAndPush();
-}
-
+		this.setMessage(`已更新设置: ${String(key)}`, 'success');
+		await this.refreshDoctorAndPush();
+	}
 }
 
 function getNonce(): string {

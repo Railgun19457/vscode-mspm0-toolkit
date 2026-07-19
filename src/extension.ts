@@ -7,7 +7,7 @@ import { DeviceRegistry } from './services/deviceRegistry';
 import { ProjectService } from './services/projectService';
 import { ToolPathService } from './services/toolPathService';
 import { ToolchainDetector } from './services/toolchainDetector';
-import { getOutput, logInfo } from './ui/output';
+import { getOutput, logInfo, revealOutput, showOutput } from './ui/output';
 import { SidebarProvider } from './ui/sidebar/sidebarProvider';
 import { StatusBarController } from './ui/statusBar';
 import { SerialService } from './services/serialService';
@@ -50,6 +50,8 @@ export function activate(context: vscode.ExtensionContext): void {
 					await fn();
 				} catch (err) {
 					const text = err instanceof Error ? err.message : String(err);
+					statusBar.setAction(text, 'error');
+					revealOutput('error');
 					vscode.window.showErrorMessage(`MSPM0: ${text}`);
 					getOutput().appendLine(`[error] ${text}`);
 				}
@@ -61,20 +63,28 @@ export function activate(context: vscode.ExtensionContext): void {
 		await vscode.commands.executeCommand('workbench.view.extension.mspm0');
 	});
 
+	register('mspm0.showOutput', async () => {
+		showOutput();
+	});
+
 	register('mspm0.doctor', async () => {
+		statusBar.setAction('环境检测中…', 'running');
 		await sidebar.refreshDoctorAndPush();
-		getOutput().show(true);
-		vscode.window.showInformationMessage('MSPM0: 环境检测完成（见侧边栏与输出通道）');
+		statusBar.setAction('环境检测完成', 'success');
+		vscode.window.showInformationMessage('MSPM0: 环境检测完成（见侧边栏；点击状态栏可看输出）');
 	});
 
 	register('mspm0.autoDetectTools', async () => {
+		statusBar.setAction('探测工具中…', 'running');
 		const detected = await toolPaths.autoDetect();
 		await toolPaths.applyDetected(detected, false);
 		await sidebar.refreshDoctorAndPush();
+		statusBar.setAction('工具探测完成', 'success');
 		vscode.window.showInformationMessage('MSPM0: 自动探测完成');
 	});
 
 	register('mspm0.initProject', async () => {
+		statusBar.setAction('初始化工程…', 'running');
 		const project = projects.getState();
 		const target = project.config ?? {
 			...DEFAULT_TARGET,
@@ -82,12 +92,15 @@ export function activate(context: vscode.ExtensionContext): void {
 		};
 		await projects.initProject(target, toolPaths.getPaths());
 		await sidebar.refreshDoctorAndPush();
+		statusBar.setAction('工程已初始化', 'success');
 		vscode.window.showInformationMessage('MSPM0: 工程已初始化');
 	});
 
 	register('mspm0.syncConfig', async () => {
+		statusBar.setAction('同步配置…', 'running');
 		await projects.syncConfig(toolPaths.getPaths());
 		await sidebar.refreshDoctorAndPush();
+		statusBar.setAction('配置已同步', 'success');
 		vscode.window.showInformationMessage('MSPM0: 配置已同步');
 	});
 
@@ -96,16 +109,20 @@ export function activate(context: vscode.ExtensionContext): void {
 		const cfg = vscode.workspace.getConfiguration('mspm0');
 		const jobs = cfg.get<number>('buildJobs', 8);
 		const tools = toolPaths.getPaths();
+		statusBar.setAction('构建中…', 'running');
 		if (cfg.get<boolean>('autoSyscfgOnBuild', true)) {
 			await build.syscfgGenerate(root, tools);
 		}
 		await build.build(root, tools, jobs);
+		statusBar.setAction('构建成功', 'success');
 		vscode.window.showInformationMessage('MSPM0: 构建完成');
 	});
 
 	register('mspm0.clean', async () => {
 		const root = requireRoot(projects);
+		statusBar.setAction('清理中…', 'running');
 		await build.clean(root, toolPaths.getPaths());
+		statusBar.setAction('清理完成', 'success');
 		vscode.window.showInformationMessage('MSPM0: 清理完成');
 	});
 
@@ -114,10 +131,12 @@ export function activate(context: vscode.ExtensionContext): void {
 		const cfg = vscode.workspace.getConfiguration('mspm0');
 		const tools = toolPaths.getPaths();
 		const buildFirst = cfg.get<boolean>('buildBeforeFlash', true);
+		statusBar.setAction(buildFirst ? '构建并烧录…' : '烧录中…', 'running');
 		if (buildFirst && cfg.get<boolean>('autoSyscfgOnBuild', true)) {
 			await build.syscfgGenerate(root, tools);
 		}
 		await build.flash(root, tools, buildFirst);
+		statusBar.setAction(buildFirst ? '构建并烧录成功' : '烧录成功', 'success');
 		vscode.window.showInformationMessage(buildFirst ? 'MSPM0: 构建并烧录完成' : 'MSPM0: 烧录完成');
 	});
 
@@ -129,12 +148,16 @@ export function activate(context: vscode.ExtensionContext): void {
 			throw new Error('工程未初始化');
 		}
 		const tools = toolPaths.getPaths();
+		statusBar.setAction('启动 SysConfig…', 'running');
 		await build.syscfgGui(root, tools, tools.sdk, cfg.syscfgFile);
+		statusBar.setAction('SysConfig 已启动', 'success');
 	});
 
 	register('mspm0.sysconfig.generate', async () => {
 		const root = requireRoot(projects);
+		statusBar.setAction('生成 SysConfig…', 'running');
 		await build.syscfgGenerate(root, toolPaths.getPaths());
+		statusBar.setAction('SysConfig 生成成功', 'success');
 		vscode.window.showInformationMessage('MSPM0: SysConfig 生成完成');
 	});
 
@@ -143,6 +166,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		const project = projects.readConfig(root);
 		const cfg = vscode.workspace.getConfiguration('mspm0');
 		const tools = toolPaths.getPaths();
+		statusBar.setAction('启动调试…', 'running');
 		if (cfg.get<boolean>('buildBeforeDebug', true)) {
 			const jobs = cfg.get<number>('buildJobs', 8);
 			if (cfg.get<boolean>('autoSyscfgOnBuild', true)) {
@@ -151,6 +175,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			await build.build(root, tools, jobs);
 		}
 		await debug.start(undefined, project?.probe, root);
+		statusBar.setAction('调试已启动', 'success');
 	});
 	register('mspm0.healthCheck', async () => {
 		const root = projects.getWorkspaceRoot();
@@ -158,13 +183,18 @@ export function activate(context: vscode.ExtensionContext): void {
 		const deviceId = cfg?.device || vscode.workspace.getConfiguration('mspm0').get<string>('defaultDevice', DEFAULT_TARGET.device);
 		const device = devices.get(deviceId);
 		const health = projects.checkHealth(root, device);
-		getOutput().show(true);
 		getOutput().appendLine('==== Health Check ====');
 		for (const issue of health.issues) {
 			getOutput().appendLine('[' + issue.level + '] ' + issue.message);
 		}
 		await sidebar.refreshDoctorAndPush();
-		vscode.window.showInformationMessage(health.ok ? 'MSPM0: 工程健康检查通过' : 'MSPM0: 工程健康检查发现问题，详见输出通道');
+		if (health.ok) {
+			statusBar.setAction('健康检查通过', 'success');
+		} else {
+			statusBar.setAction('健康检查有问题', 'error');
+			revealOutput('error');
+		}
+		vscode.window.showInformationMessage(health.ok ? 'MSPM0: 工程健康检查通过' : 'MSPM0: 工程健康检查发现问题，点击状态栏查看输出');
 	});
 
 	register('mspm0.createProject', async () => {
@@ -176,9 +206,11 @@ export function activate(context: vscode.ExtensionContext): void {
 	register('mspm0.openSerial', async () => {
 		const result = await serial.open();
 		if (result.ok) {
+			statusBar.setAction('串口已打开', 'success');
 			vscode.window.showInformationMessage(`MSPM0: ${result.message}`);
 			return;
 		}
+		statusBar.setAction('串口打开失败', 'error');
 		if (result.canInstall) {
 			await serial.promptInstallOrOpen();
 			return;
@@ -187,9 +219,11 @@ export function activate(context: vscode.ExtensionContext): void {
 	});
 
 	register('mspm0.forceDetectTools', async () => {
+		statusBar.setAction('强制探测工具…', 'running');
 		const detected = await toolPaths.autoDetect();
 		await toolPaths.applyDetected(detected, true);
 		await sidebar.refreshDoctorAndPush();
+		statusBar.setAction('强制探测完成', 'success');
 		vscode.window.showInformationMessage('MSPM0: 强制探测并覆盖路径完成');
 	});
 

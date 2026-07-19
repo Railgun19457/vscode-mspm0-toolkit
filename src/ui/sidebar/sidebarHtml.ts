@@ -89,11 +89,22 @@ return `<!DOCTYPE html>
     input:focus, select:focus { outline: 1px solid var(--vscode-focusBorder, #007acc); outline-offset: -1px; }
     input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--vscode-focusBorder, #007acc); }
     button {
-      background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-      border: none; border-radius: 5px; padding: 6px 8px; cursor: pointer; font-size: 12px; min-height: 28px;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border: 1px solid color-mix(in srgb, var(--vscode-button-foreground) 28%, transparent);
+      border-radius: 5px;
+      padding: 6px 8px;
+      cursor: pointer;
+      font-size: 12px;
+      min-height: 28px;
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-contrastBorder, transparent) 60%, transparent);
     }
     button:hover { background: var(--vscode-button-hoverBackground); }
-    button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+    button.secondary {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+      border: 1px solid color-mix(in srgb, var(--vscode-button-secondaryForeground) 35%, var(--vscode-widget-border, #555) 65%);
+    }
     button:disabled { opacity: .45; cursor: not-allowed; }
     button .kbd { display:block; margin-top:2px; font-size:10px; opacity:.75; font-weight:500; }
     .btn-row { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
@@ -226,6 +237,13 @@ return `<!DOCTYPE html>
             <div class="desc">路径为空时扩展激活后自动扫描本机工具</div>
           </div>
           <input id="optAutoDetectStartup" type="checkbox" />
+        </div>
+        <div class="row toggle">
+          <div>
+            <label for="optOpenOutputOnError">仅出错时打开输出</label>
+            <div class="desc">默认有输出就打开；启用后成功只提示状态栏，失败才打开输出</div>
+          </div>
+          <input id="optOpenOutputOnError" type="checkbox" />
         </div>
       </div>
     </details>
@@ -470,6 +488,7 @@ return `<!DOCTYPE html>
       $('optBuildBeforeFlash').checked = st.buildBeforeFlash !== false;
       $('optBuildBeforeDebug').checked = st.buildBeforeDebug !== false;
       $('optAutoDetectStartup').checked = st.autoDetectOnStartup !== false;
+      $('optOpenOutputOnError').checked = !!st.openOutputOnError;
       $('optBuildJobs').value = String(st.buildJobs || 8);
       $('optSerialBaud').value = String(st.serialBaudRate || 115200);
       $('optToolScope').value = st.toolPathScope === 'workspace' ? 'workspace' : 'user';
@@ -551,6 +570,7 @@ return `<!DOCTYPE html>
     $('optAutoSyscfg').addEventListener('change', (e) => { if (!suppress) postSetting('autoSyscfgOnBuild', !!e.target.checked); });
     $('optBuildBeforeFlash').addEventListener('change', (e) => { if (!suppress) postSetting('buildBeforeFlash', !!e.target.checked); });
     $('optBuildBeforeDebug').addEventListener('change', (e) => { if (!suppress) postSetting('buildBeforeDebug', !!e.target.checked); });
+    $('optOpenOutputOnError').addEventListener('change', (e) => { if (!suppress) postSetting('openOutputOnError', !!e.target.checked); });
     $('optAutoDetectStartup').addEventListener('change', (e) => { if (!suppress) postSetting('autoDetectOnStartup', !!e.target.checked); });
     $('optBuildJobs').addEventListener('change', (e) => { if (!suppress) postSetting('buildJobs', Number(e.target.value || 8)); });
     $('optSerialBaud').addEventListener('change', (e) => { if (!suppress) postSetting('serialBaudRate', Number(e.target.value || 115200)); });

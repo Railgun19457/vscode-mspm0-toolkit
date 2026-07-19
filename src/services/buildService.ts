@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { ToolPaths } from '../model/types';
-import { logError, logInfo, logSection, showOutput } from '../ui/output';
+import { logError, logInfo, logSection, revealOutput } from '../ui/output';
 import { toBackslash } from '../util/pathUtil';
 import { runCommand } from '../util/processUtil';
 
@@ -14,10 +14,18 @@ export class BuildService {
 			toBackslash(tools.openocd),
 			process.env.Path || process.env.PATH || '',
 		].filter(Boolean);
+		const pathValue = pathParts.join(';');
 		return {
 			...process.env,
-			Path: pathParts.join(';'),
-			PATH: pathParts.join(';'),
+			// Make variables (override toolpaths.mk when set)
+			GCC_PATH: tools.gcc || process.env.GCC_PATH || '',
+			SDK: tools.sdk || process.env.SDK || '',
+			SYSCONFIG_ROOT: tools.sysconfig || process.env.SYSCONFIG_ROOT || '',
+			JLINK_ROOT: tools.jlink || process.env.JLINK_ROOT || '',
+			OPENOCD_BIN: tools.openocd || process.env.OPENOCD_BIN || '',
+			MAKE_BIN: tools.make || process.env.MAKE_BIN || '',
+			Path: pathValue,
+			PATH: pathValue,
 		};
 	}
 
@@ -39,7 +47,6 @@ export class BuildService {
 
 	async syscfgGui(projectRoot: string, tools: ToolPaths, sdk: string, syscfgFile: string): Promise<void> {
 		logSection('SysConfig GUI');
-		showOutput();
 		const gui = toBackslash(`${tools.sysconfig}/sysconfig_gui.bat`);
 		const args = [
 			'--product',
@@ -64,7 +71,8 @@ export class BuildService {
 
 	private async runMake(projectRoot: string, tools: ToolPaths, args: string[], title: string): Promise<void> {
 		logSection(title);
-		showOutput();
+		// Default: open output when action produces logs. If openOutputOnError is on, wait for failure.
+		revealOutput('start');
 		const makeExe = tools.make ? toBackslash(`${tools.make}/make.exe`) : 'make';
 		logInfo(`$ ${makeExe} ${args.join(' ')}`);
 		const result = await runCommand(makeExe, args, {
@@ -79,8 +87,10 @@ export class BuildService {
 			logError(result.stderr.trimEnd());
 		}
 		if (result.code !== 0) {
+			revealOutput('error');
 			throw new Error(`${title} 失败 (exit ${result.code})`);
 		}
 		logInfo(`${title} 完成`);
+		revealOutput('success');
 	}
 }

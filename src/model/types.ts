@@ -121,6 +121,11 @@ export interface PluginSettings {
 	autoSyscfgOnBuild: boolean;
 	buildBeforeFlash: boolean;
 	buildBeforeDebug: boolean;
+	/**
+	 * When true, only auto-open the MSPM0 output channel on failure (success: status bar only).
+	 * When false (default), auto-open whenever an action produces output.
+	 */
+	openOutputOnError: boolean;
 }
 
 export interface SidebarState {
@@ -196,4 +201,5 @@ export const DEFAULT_PLUGIN_SETTINGS: PluginSettings = {
 	autoSyscfgOnBuild: true,
 	buildBeforeFlash: true,
 	buildBeforeDebug: true,
+	openOutputOnError: false,
 };

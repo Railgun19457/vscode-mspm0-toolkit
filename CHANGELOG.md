@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.6
+
+- 修正 `mspm0.openOutputOnError` 语义：默认有输出就打开；启用后仅出错打开，成功仅状态栏提示
+
+## 0.6.5
+
+- 新增 `mspm0.openOutputOnError` 与状态栏动作反馈（点击打开输出）
+- 成功/失败状态栏指示
+
+## 0.6.4
+
+- Portable tool paths: `.vscode` uses `${config:mspm0.*}` instead of hard-coded drive letters
+- Extension/tasks inject `GCC_PATH`/`SDK`/… into make environment
+- `toolpaths.mk` becomes optional local cache (`-include`), re-sync after moving machines
+
 ## 0.6.3
 
 - 工作流默认全部开启：构建前 SysConfig、烧录/调试前构建、启动自动探测

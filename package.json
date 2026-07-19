@@ -2,7 +2,7 @@
   "name": "mspm0-toolkit",
   "displayName": "MSPM0 Toolkit",
   "description": "TI MSPM0 full-workflow toolkit for VS Code: sidebar console, toolchain setup, project init, build, flash, debug, SysConfig",
-  "version": "0.6.3",
+  "version": "0.6.6",
   "publisher": "Railgun19457",
   "engines": {
     "vscode": "^1.85.0"
@@ -40,7 +40,8 @@
     "onCommand:mspm0.healthCheck",
     "onCommand:mspm0.createProject",
     "onCommand:mspm0.openSerial",
-    "onCommand:mspm0.forceDetectTools"
+    "onCommand:mspm0.forceDetectTools",
+    "onCommand:mspm0.showOutput"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -152,6 +153,12 @@
         "title": "强制覆盖探测",
         "category": "MSPM0",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "mspm0.showOutput",
+        "title": "打开输出",
+        "category": "MSPM0",
+        "icon": "$(output)"
       }
     ],
     "configuration": {
@@ -248,6 +255,11 @@
           "type": "boolean",
           "default": true,
           "description": "调试前自动构建（对应 launch preLaunchTask 语义的扩展侧行为）"
+        },
+        "mspm0.openOutputOnError": {
+          "type": "boolean",
+          "default": false,
+          "description": "仅出错时自动打开输出窗口。默认关闭：有输出就打开；启用后成功只提示状态栏，失败才打开输出"
         }
       }
     },

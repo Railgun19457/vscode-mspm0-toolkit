@@ -1,19 +1,30 @@
 import * as vscode from 'vscode';
 import { DoctorReport, ProjectState } from '../model/types';
 
+export type StatusActionLevel = 'info' | 'running' | 'success' | 'error';
+
 /**
- * Status bar: only show current chip / project status on the left.
+ * Status bar: chip/project on the left + transient action result on the right.
+ * Clicking the action item opens the MSPM0 output channel.
  */
 export class StatusBarController implements vscode.Disposable {
 	private readonly projectItem: vscode.StatusBarItem;
+	private readonly actionItem: vscode.StatusBarItem;
 	private readonly disposables: vscode.Disposable[] = [];
+	private clearTimer?: NodeJS.Timeout;
 
 	constructor() {
 		this.projectItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
 		this.projectItem.command = 'mspm0.openSidebar';
 		this.projectItem.tooltip = '打开 MSPM0 侧边栏';
 		this.projectItem.show();
-		this.disposables.push(this.projectItem);
+
+		this.actionItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
+		this.actionItem.command = 'mspm0.showOutput';
+		this.actionItem.tooltip = '点击查看 MSPM0 输出';
+		this.actionItem.hide();
+
+		this.disposables.push(this.projectItem, this.actionItem);
 	}
 
 	update(project: ProjectState, _doctor?: DoctorReport): void {
@@ -35,7 +46,55 @@ export class StatusBarController implements vscode.Disposable {
 		this.projectItem.backgroundColor = undefined;
 	}
 
+	/**
+	 * Show transient action feedback on the status bar.
+	 * Success/error auto-clear after a few seconds; running stays until next update.
+	 */
+	setAction(message: string, level: StatusActionLevel = 'info', autoClearMs?: number): void {
+		if (this.clearTimer) {
+			clearTimeout(this.clearTimer);
+			this.clearTimer = undefined;
+		}
+
+		const icon =
+			level === 'running'
+				? '$(sync~spin)'
+				: level === 'success'
+					? '$(check)'
+					: level === 'error'
+						? '$(error)'
+						: '$(info)';
+
+		this.actionItem.text = `${icon} ${message}`;
+		this.actionItem.tooltip = `${message}\n点击打开 MSPM0 输出`;
+		this.actionItem.backgroundColor =
+			level === 'error' ? new vscode.ThemeColor('statusBarItem.errorBackground') : undefined;
+		this.actionItem.show();
+
+		const clearAfter =
+			autoClearMs ??
+			(level === 'running' ? 0 : level === 'error' ? 12000 : 6000);
+		if (clearAfter > 0) {
+			this.clearTimer = setTimeout(() => {
+				this.clearAction();
+			}, clearAfter);
+		}
+	}
+
+	clearAction(): void {
+		if (this.clearTimer) {
+			clearTimeout(this.clearTimer);
+			this.clearTimer = undefined;
+		}
+		this.actionItem.hide();
+		this.actionItem.text = '';
+		this.actionItem.backgroundColor = undefined;
+	}
+
 	dispose(): void {
+		if (this.clearTimer) {
+			clearTimeout(this.clearTimer);
+		}
 		for (const d of this.disposables) {
 			d.dispose();
 		}
