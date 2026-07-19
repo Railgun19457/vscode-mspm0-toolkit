@@ -2,7 +2,6 @@ import * as vscode from 'vscode';
 import {
 	ActionAvailability,
 	ActionId,
-	DEFAULT_PLUGIN_SETTINGS,
 	DEFAULT_TARGET,
 	PluginSettings,
 	PROBE_LABELS,
@@ -13,17 +12,18 @@ import {
 	ToolKey,
 	TOOL_LABELS,
 } from '../../model/types';
-import { BuildService } from '../../services/buildService';
-import { DebugService } from '../../services/debugService';
 import { DeviceRegistry } from '../../services/deviceRegistry';
 import { ProjectService } from '../../services/projectService';
+import { SerialService } from '../../services/serialService';
+import { readPluginSettings } from '../../services/settingsService';
 import { ToolPathService } from '../../services/toolPathService';
 import { ToolchainDetector } from '../../services/toolchainDetector';
+import { WorkflowService } from '../../services/workflowService';
+import { pathBasename } from '../../util/pathBase';
 import { logError, logInfo, logSection, revealOutput } from '../output';
+import { StatusBarController } from '../statusBar';
 import { HostToWebview, WebviewToHost } from './messages';
 import { getSidebarHtml } from './sidebarHtml';
-import { StatusBarController } from '../statusBar';
-import { SerialService } from '../../services/serialService';
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'mspm0.sidebar.panel';
@@ -47,17 +47,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		private readonly detector: ToolchainDetector,
 		private readonly projects: ProjectService,
 		private readonly devices: DeviceRegistry,
-		private readonly build: BuildService,
-		private readonly debug: DebugService,
-		private readonly statusBar?: StatusBarController
+		private readonly workflow: WorkflowService,
+		private readonly statusBar?: StatusBarController,
+		private readonly serial?: SerialService
 	) {
-		const cfgDevice = vscode.workspace.getConfiguration('mspm0').get<string>('defaultDevice');
-		if (cfgDevice) {
-			this.targetDraft.device = cfgDevice;
+		const settings = readPluginSettings();
+		if (settings.defaultDevice) {
+			this.targetDraft.device = settings.defaultDevice;
 		}
-		const cfgProbe = vscode.workspace.getConfiguration('mspm0').get<string>('defaultProbe');
-		if (cfgProbe === 'jlink' || cfgProbe === 'openocd' || cfgProbe === 'xds110' || cfgProbe === 'cmsis-dap') {
-			this.targetDraft.probe = cfgProbe as ProbeType;
+		const probe = settings.defaultProbe;
+		if (probe === 'jlink' || probe === 'openocd' || probe === 'xds110' || probe === 'cmsis-dap') {
+			this.targetDraft.probe = probe as ProbeType;
 		}
 
 		// Auto-switch project when active editor / tab changes (debounced).
@@ -102,8 +102,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		if (Date.now() < this.suppressAutoSwitchUntil) {
 			return;
 		}
-		const enabled = this.readPluginSettings().autoSwitchProject;
-		if (!enabled) {
+		if (!readPluginSettings().autoSwitchProject) {
 			return;
 		}
 		const pathToMatch =
@@ -130,7 +129,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		if (this.busyAction || Date.now() < this.suppressAutoSwitchUntil) {
 			return;
 		}
-		if (!this.readPluginSettings().autoSwitchProject) {
+		if (!readPluginSettings().autoSwitchProject) {
 			return;
 		}
 		const hit = this.projects.findProjectForFile(filePath);
@@ -166,7 +165,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			localResourceRoots: [this.context.extensionUri],
 		};
 		const nonce = getNonce();
-		webviewView.webview.html = getSidebarHtml(webviewView.webview, nonce);
+		webviewView.webview.html = getSidebarHtml(
+			webviewView.webview,
+			nonce,
+			this.context.extensionUri
+		);
 		webviewView.webview.onDidReceiveMessage(async (msg: WebviewToHost) => {
 			try {
 				await this.onMessage(msg);
@@ -247,7 +250,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
 		return {
 			page: this.page,
-			settings: this.readPluginSettings(),
+			settings: readPluginSettings(),
 			workspaceFolder: this.projects.getWorkspaceRoot(),
 			workspaceFolders: folders,
 			project,
@@ -540,8 +543,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		try {
 			await this.projects.initProject(this.targetDraft, this.toolPaths.getPaths(), targetRoot);
 			this.healthCache = undefined;
-this.bumpManualProjectPick();
-			
+			this.bumpManualProjectPick();
+
 			const insideWs = this.projects.isPathInsideWorkspace(targetRoot);
 			if (insideWs) {
 				this.projects.setWorkspaceRoot(targetRoot);
@@ -572,7 +575,7 @@ this.bumpManualProjectPick();
 	}
 
 	private async handleOpenSerial(): Promise<void> {
-		const serial = new SerialService(this.context);
+		const serial = this.serial ?? new SerialService(this.context);
 		const result = await serial.open();
 		if (result.ok) {
 			this.setMessage(result.message, 'success');
@@ -582,10 +585,6 @@ this.bumpManualProjectPick();
 		}
 		if (result.canInstall) {
 			await serial.promptInstallOrOpen();
-			this.setMessage(result.message, 'error');
-			this.statusBar?.setAction('串口打开失败', 'error');
-			await this.pushState();
-			return;
 		}
 		this.setMessage(result.message, 'error');
 		this.statusBar?.setAction('串口打开失败', 'error');
@@ -663,94 +662,22 @@ ${root}`,
 	}
 
 	private async handleAction(action: ActionId): Promise<void> {
-		const root = this.projects.getWorkspaceRoot();
-		if (!root) {
-			throw new Error('请先打开工作区文件夹');
-		}
-		if (!this.projects.isInitialized(root)) {
-			throw new Error('请先初始化工程');
-		}
-		const tools = this.toolPaths.getPaths();
-		const project = this.projects.readConfig(root);
-		if (!project) {
-			throw new Error('无法读取工程配置');
-		}
+		const runningLabels: Record<ActionId, string> = {
+			build: '构建中…',
+			clean: '清理中…',
+			flash: '烧录中…',
+			syscfgGui: '启动 SysConfig…',
+			syscfgGen: '生成 SysConfig…',
+			debug: '启动调试…',
+		};
 
 		this.busyAction = action;
-		const runningLabel =
-			action === 'build'
-				? '构建中…'
-				: action === 'clean'
-					? '清理中…'
-					: action === 'flash'
-						? '烧录中…'
-						: action === 'syscfgGui'
-							? '启动 SysConfig…'
-							: action === 'syscfgGen'
-								? '生成 SysConfig…'
-								: action === 'debug'
-									? '启动调试…'
-									: '执行中…';
-		this.statusBar?.setAction(runningLabel, 'running');
+		this.statusBar?.setAction(runningLabels[action] || '执行中…', 'running');
 		await this.pushState();
 		try {
-			const settings = this.readPluginSettings();
-			const jobs = settings.buildJobs;
-			switch (action) {
-				case 'build':
-					if (settings.autoSyscfgOnBuild) {
-						await this.build.syscfgGenerate(root, tools);
-					}
-					await this.build.build(root, tools, jobs);
-					{
-						const msg = settings.autoSyscfgOnBuild ? 'SysConfig + 构建完成' : '构建完成';
-						this.setMessage(msg, 'success');
-						this.statusBar?.setAction(settings.autoSyscfgOnBuild ? '构建成功' : '构建成功', 'success');
-					}
-					break;
-				case 'clean':
-					await this.build.clean(root, tools);
-					this.setMessage('清理完成', 'success');
-					this.statusBar?.setAction('清理完成', 'success');
-					break;
-				case 'flash':
-					if (settings.buildBeforeFlash) {
-						if (settings.autoSyscfgOnBuild) {
-							await this.build.syscfgGenerate(root, tools);
-						}
-					}
-					await this.build.flash(root, tools, settings.buildBeforeFlash);
-					{
-						const msg = settings.buildBeforeFlash ? '构建并烧录完成' : '烧录完成（未重建）';
-						this.setMessage(msg, 'success');
-						this.statusBar?.setAction(settings.buildBeforeFlash ? '构建并烧录成功' : '烧录成功', 'success');
-					}
-					break;
-				case 'syscfgGui':
-					await this.build.syscfgGui(root, tools, tools.sdk, project.syscfgFile);
-					this.setMessage('已打开 SysConfig GUI', 'success');
-					this.statusBar?.setAction('SysConfig 已启动', 'success');
-					break;
-				case 'syscfgGen':
-					await this.build.syscfgGenerate(root, tools);
-					this.setMessage('SysConfig 代码生成完成', 'success');
-					this.statusBar?.setAction('SysConfig 生成成功', 'success');
-					break;
-				case 'debug':
-					if (settings.buildBeforeDebug) {
-						if (settings.autoSyscfgOnBuild) {
-							await this.build.syscfgGenerate(root, tools);
-						}
-						await this.build.build(root, tools, jobs);
-					}
-					await this.debug.start(undefined, project.probe, root);
-					{
-						const msg = settings.buildBeforeDebug ? '构建后已启动调试' : '已启动调试';
-						this.setMessage(msg, 'success');
-						this.statusBar?.setAction('调试已启动', 'success');
-					}
-					break;
-			}
+			const result = await this.workflow.run(action);
+			this.setMessage(result.successMessage, 'success');
+			this.statusBar?.setAction(result.statusMessage, 'success');
 		} catch (err) {
 			const text = err instanceof Error ? err.message : String(err);
 			this.setMessage(text, 'error');
@@ -761,24 +688,6 @@ ${root}`,
 			this.busyAction = undefined;
 			await this.pushState();
 		}
-	}
-
-	private readPluginSettings(): PluginSettings {
-		const cfg = vscode.workspace.getConfiguration('mspm0');
-		const scope = cfg.get<string>('toolPathScope', DEFAULT_PLUGIN_SETTINGS.toolPathScope);
-		return {
-			buildJobs: cfg.get<number>('buildJobs', DEFAULT_PLUGIN_SETTINGS.buildJobs),
-			autoDetectOnStartup: cfg.get<boolean>('autoDetectOnStartup', DEFAULT_PLUGIN_SETTINGS.autoDetectOnStartup),
-			toolPathScope: scope === 'workspace' ? 'workspace' : 'user',
-			serialBaudRate: cfg.get<number>('serialBaudRate', DEFAULT_PLUGIN_SETTINGS.serialBaudRate),
-			defaultDevice: cfg.get<string>('defaultDevice', DEFAULT_PLUGIN_SETTINGS.defaultDevice),
-			defaultProbe: cfg.get<string>('defaultProbe', DEFAULT_PLUGIN_SETTINGS.defaultProbe),
-			autoSyscfgOnBuild: cfg.get<boolean>('autoSyscfgOnBuild', DEFAULT_PLUGIN_SETTINGS.autoSyscfgOnBuild),
-			buildBeforeFlash: cfg.get<boolean>('buildBeforeFlash', DEFAULT_PLUGIN_SETTINGS.buildBeforeFlash),
-			buildBeforeDebug: cfg.get<boolean>('buildBeforeDebug', DEFAULT_PLUGIN_SETTINGS.buildBeforeDebug),
-			autoSwitchProject: cfg.get<boolean>('autoSwitchProject', DEFAULT_PLUGIN_SETTINGS.autoSwitchProject),
-			openOutputOnError: cfg.get<boolean>('openOutputOnError', DEFAULT_PLUGIN_SETTINGS.openOutputOnError),
-		};
 	}
 
 	private async handlePluginSetting(key: keyof PluginSettings, value: string | number | boolean): Promise<void> {
@@ -810,10 +719,4 @@ function getNonce(): string {
 		id += chars.charAt(Math.floor(Math.random() * chars.length));
 	}
 	return id;
-}
-
-function pathBasename(p: string): string {
-	const norm = p.replace(/\\/g, '/');
-	const parts = norm.split('/').filter(Boolean);
-	return parts[parts.length - 1] || p;
 }

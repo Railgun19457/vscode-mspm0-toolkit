@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { DoctorReport, ProjectState } from '../model/types';
+import { pathBasename } from '../util/pathBase';
 
 export type StatusActionLevel = 'info' | 'running' | 'success' | 'error';
 
@@ -7,12 +8,6 @@ export type StatusActionLevel = 'info' | 'running' | 'success' | 'error';
  * Status bar: chip/project on the left + transient action result on the right.
  * Clicking the action item opens the MSPM0 output channel.
  */
-function basename(p: string): string {
-	const norm = p.replace(/\\/g, '/');
-	const parts = norm.split('/').filter(Boolean);
-	return parts[parts.length - 1] || p;
-}
-
 export class StatusBarController implements vscode.Disposable {
 	private readonly projectItem: vscode.StatusBarItem;
 	private readonly actionItem: vscode.StatusBarItem;
@@ -40,7 +35,7 @@ export class StatusBarController implements vscode.Disposable {
 			this.projectItem.backgroundColor = undefined;
 			return;
 		}
-		const shortName = project.name || basename(project.root);
+		const shortName = project.name || pathBasename(project.root);
 		if (!project.initialized) {
 			this.projectItem.text = `$(chip) ${shortName}`;
 			this.projectItem.tooltip = `工程未初始化\n${shortName}\n根目录: ${project.root}\n点击打开 MSPM0 侧边栏`;

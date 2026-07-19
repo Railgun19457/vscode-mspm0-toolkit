@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ProbeType } from '../model/types';
+import { findContainingWorkspaceFolder, normalizeRoot } from '../util/workspacePath';
 
 export class DebugService {
 	/**
@@ -15,10 +16,10 @@ export class DebugService {
 			throw new Error('请先打开工作区文件夹');
 		}
 
-		const projectAbs = projectRoot ? path.normalize(path.resolve(projectRoot)) : undefined;
+		const projectAbs = projectRoot ? normalizeRoot(projectRoot) : undefined;
 		const folder =
-			(projectAbs && this.findContainingFolder(projectAbs, folders)) ||
-			(projectAbs && folders.find((f) => path.normalize(f.uri.fsPath) === projectAbs)) ||
+			(projectAbs && findContainingWorkspaceFolder(projectAbs, folders)) ||
+			(projectAbs && folders.find((f) => normalizeRoot(f.uri.fsPath) === projectAbs)) ||
 			folders[0];
 
 		const cortex = vscode.extensions.getExtension('marus25.cortex-debug');
@@ -64,28 +65,6 @@ export class DebugService {
 				throw new Error('启动调试失败');
 			}
 		}
-	}
-
-	private findContainingFolder(
-		projectAbs: string,
-		folders: readonly vscode.WorkspaceFolder[]
-	): vscode.WorkspaceFolder | undefined {
-		let best: vscode.WorkspaceFolder | undefined;
-		let bestLen = -1;
-		for (const f of folders) {
-			const folderAbs = path.normalize(f.uri.fsPath);
-			if (
-				projectAbs === folderAbs ||
-				projectAbs.startsWith(folderAbs + path.sep) ||
-				projectAbs.startsWith(folderAbs + '/')
-			) {
-				if (folderAbs.length > bestLen) {
-					best = f;
-					bestLen = folderAbs.length;
-				}
-			}
-		}
-		return best;
 	}
 
 	private readProjectLaunchConfigs(

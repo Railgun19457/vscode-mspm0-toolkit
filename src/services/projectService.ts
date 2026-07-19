@@ -11,6 +11,12 @@ import {
 	WorkspaceFolderInfo,
 } from '../model/types';
 import { pathExists, readJsonFile, writeJsonFile, writeTextFile, ensureDir, copyFileIfMissing } from '../util/fsUtil';
+import {
+	findContainingWorkspaceFolder,
+	isPathInsideRoot,
+	normalizeRoot,
+	pathKey,
+} from '../util/workspacePath';
 import { DeviceRegistry } from './deviceRegistry';
 import { ConfigGenerator } from './configGenerator';
 
@@ -56,8 +62,8 @@ export class ProjectService {
 		const byPath = new Map<string, WorkspaceFolderInfo>();
 
 		for (const f of folders) {
-			const abs = this.normalizeRoot(f.uri.fsPath);
-			const rootKey = this.pathKey(abs);
+			const abs = normalizeRoot(f.uri.fsPath);
+			const rootKey = pathKey(abs);
 			byPath.set(rootKey, this.enrichProjectInfo({
 				name: f.name,
 				path: abs,
@@ -68,7 +74,7 @@ export class ProjectService {
 			}));
 
 			for (const proj of this.scanProjectsUnder(abs, f.name)) {
-				const key = this.pathKey(proj.path);
+				const key = pathKey(proj.path);
 				if (byPath.has(key)) {
 					const existing = byPath.get(key)!;
 					// Keep workspace-root display name; upgrade initialized flag/meta.
@@ -90,8 +96,8 @@ export class ProjectService {
 
 		// Ensure the currently selected root appears even if not yet initialized / not scanned.
 		if (this.activeRoot) {
-			const abs = this.normalizeRoot(this.activeRoot);
-			const key = this.pathKey(abs);
+			const abs = normalizeRoot(this.activeRoot);
+			const key = pathKey(abs);
 			if (!byPath.has(key) && this.isPathInsideWorkspace(abs) && pathExists(abs)) {
 				const ws = this.getContainingWorkspaceFolder(abs);
 				const rel = ws
@@ -103,7 +109,7 @@ export class ProjectService {
 					initialized: this.isInitialized(abs),
 					relativePath: rel,
 					isWorkspaceRoot: false,
-					workspaceFolder: ws ? this.normalizeRoot(ws.uri.fsPath) : undefined,
+					workspaceFolder: ws ? normalizeRoot(ws.uri.fsPath) : undefined,
 				}));
 			}
 		}
@@ -116,34 +122,6 @@ export class ProjectService {
 			// Prefer non-workspace-root entries when both initialized? Keep stable name sort.
 			return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
 		});
-	}
-
-	/** Alias used by UI for clarity. */
-	listProjects(): WorkspaceFolderInfo[] {
-		return this.listWorkspaceFolders();
-	}
-
-	/**
-	 * True when `fileAbs` is the same as or inside `rootAbs` (Windows-safe).
-	 */
-	private isPathInsideRoot(fileAbs: string, rootAbs: string): boolean {
-		const fileKey = this.pathKey(fileAbs);
-		const rootKey = this.pathKey(rootAbs);
-		if (fileKey === rootKey) {
-			return true;
-		}
-		// path.relative avoids startsWith pitfalls (e.g. C:\proj vs C:\project)
-		const rel = path.relative(rootAbs, fileAbs);
-		if (!rel || rel === '') {
-			return true;
-		}
-		if (path.isAbsolute(rel)) {
-			return false;
-		}
-		if (rel === '..' || rel.startsWith('..' + path.sep) || rel.startsWith('../')) {
-			return false;
-		}
-		return true;
 	}
 
 	/**
@@ -172,7 +150,7 @@ export class ProjectService {
 
 		let abs: string;
 		try {
-			abs = this.normalizeRoot(raw);
+			abs = normalizeRoot(raw);
 		} catch {
 			return undefined;
 		}
@@ -182,14 +160,14 @@ export class ProjectService {
 			return undefined;
 		}
 
-		const matches = candidates.filter((p) => this.isPathInsideRoot(abs, p.path));
+		const matches = candidates.filter((p) => isPathInsideRoot(abs, p.path));
 		if (!matches.length) {
 			return undefined;
 		}
 
 		const score = (p: WorkspaceFolderInfo): [number, number] => {
 			// Higher is better: initialized first, then deeper (longer) path
-			return [p.initialized ? 1 : 0, this.pathKey(p.path).length];
+			return [p.initialized ? 1 : 0, pathKey(p.path).length];
 		};
 
 		matches.sort((a, b) => {
@@ -214,16 +192,16 @@ export class ProjectService {
 			return undefined;
 		}
 		const current = this.getWorkspaceRoot();
-		if (current && this.pathKey(current) === this.pathKey(hit.path)) {
+		if (current && pathKey(current) === pathKey(hit.path)) {
 			return undefined;
 		}
 		// Force active root even if path comparison earlier was stale
-		this.activeRoot = this.normalizeRoot(hit.path);
+		this.activeRoot = normalizeRoot(hit.path);
 		return this.activeRoot;
 	}
 
 	private enrichProjectInfo(info: WorkspaceFolderInfo): WorkspaceFolderInfo {
-		const abs = this.normalizeRoot(info.path);
+		const abs = normalizeRoot(info.path);
 		const shortName = path.basename(abs) || info.name;
 		let device: string | undefined = info.device;
 		if (info.initialized) {
@@ -263,7 +241,7 @@ export class ProjectService {
 		}
 
 		if (this.activeRoot) {
-			const abs = this.normalizeRoot(this.activeRoot);
+			const abs = normalizeRoot(this.activeRoot);
 			if (this.isPathInsideWorkspace(abs)) {
 				this.activeRoot = abs;
 				return abs;
@@ -278,7 +256,7 @@ export class ProjectService {
 			return this.activeRoot;
 		}
 
-		this.activeRoot = this.normalizeRoot(folders[0].uri.fsPath);
+		this.activeRoot = normalizeRoot(folders[0].uri.fsPath);
 		return this.activeRoot;
 	}
 
@@ -287,7 +265,7 @@ export class ProjectService {
 			this.activeRoot = undefined;
 			return;
 		}
-		const abs = this.normalizeRoot(root);
+		const abs = normalizeRoot(root);
 		const folders = vscode.workspace.workspaceFolders ?? [];
 		// When a workspace is open, only accept paths inside it.
 		// With no workspace (unit tests / bare usage), still allow explicit roots.
@@ -306,25 +284,7 @@ export class ProjectService {
 		if (!base) {
 			return undefined;
 		}
-		const absKey = this.pathKey(base);
-		const folders = vscode.workspace.workspaceFolders ?? [];
-		let best: vscode.WorkspaceFolder | undefined;
-		let bestLen = -1;
-		for (const f of folders) {
-			const folderAbs = this.normalizeRoot(f.uri.fsPath);
-			const folderKey = this.pathKey(folderAbs);
-			if (
-				absKey === folderKey ||
-				absKey.startsWith(folderKey + path.sep) ||
-				absKey.startsWith(folderKey + '/')
-			) {
-				if (folderAbs.length > bestLen) {
-					best = f;
-					bestLen = folderAbs.length;
-				}
-			}
-		}
-		return best;
+		return findContainingWorkspaceFolder(base);
 	}
 
 	/**
@@ -348,27 +308,8 @@ export class ProjectService {
 	}
 
 	isPathInsideWorkspace(target: string): boolean {
-		const absKey = this.pathKey(target);
 		const folders = vscode.workspace.workspaceFolders ?? [];
-		return folders.some((f) => {
-			const folderKey = this.pathKey(f.uri.fsPath);
-			const sep = path.sep;
-			return (
-				absKey === folderKey ||
-				absKey.startsWith(folderKey + sep) ||
-				absKey.startsWith(folderKey + '/')
-			);
-		});
-	}
-
-	private normalizeRoot(p: string): string {
-		return path.normalize(path.resolve(p));
-	}
-
-	/** Case-insensitive map key on Windows so E:\a and e:\a match. */
-	private pathKey(p: string): string {
-		const n = this.normalizeRoot(p);
-		return process.platform === 'win32' ? n.toLowerCase() : n;
+		return folders.some((f) => isPathInsideRoot(target, f.uri.fsPath));
 	}
 
 	/**
@@ -379,14 +320,14 @@ export class ProjectService {
 	 */
 	private scanProjectsUnder(workspaceRoot: string, workspaceName: string, maxDepth = 8): WorkspaceFolderInfo[] {
 		const results: WorkspaceFolderInfo[] = [];
-		const rootAbs = this.normalizeRoot(workspaceRoot);
+		const rootAbs = normalizeRoot(workspaceRoot);
 		const visited = new Set<string>();
 		const queue: Array<{ dir: string; depth: number }> = [{ dir: rootAbs, depth: 0 }];
 
 		while (queue.length) {
 			const { dir, depth } = queue.shift()!;
-			const dirAbs = this.normalizeRoot(dir);
-			const dirKey = this.pathKey(dirAbs);
+			const dirAbs = normalizeRoot(dir);
+			const dirKey = pathKey(dirAbs);
 			if (visited.has(dirKey)) {
 				continue;
 			}
@@ -569,7 +510,7 @@ export class ProjectService {
 		}
 		// Prefer selecting the new project as active when it sits inside the workspace.
 		// Outside-workspace creates (e.g. "新建工程" then open elsewhere) simply skip.
-		const abs = this.normalizeRoot(base);
+		const abs = normalizeRoot(base);
 		if (this.isPathInsideWorkspace(abs)) {
 			this.activeRoot = abs;
 		} else if (!(vscode.workspace.workspaceFolders?.length)) {
@@ -659,7 +600,7 @@ export class ProjectService {
 		ensureDir(path.join(base, 'src'));
 
 		// device.opt: part define used by CFLAGS via @linker/device.opt
-		writeTextFile(path.join(base, 'linker', 'device.opt'), `${device.deviceDefine.replace(/^/, '-D')}\n`);
+		writeTextFile(path.join(base, 'linker', 'device.opt'), `-D${device.deviceDefine}\n`);
 
 		// driverlib genlibs
 		const lib = device.driverlibLib || 'mspm0g1x0x_g3x0x';

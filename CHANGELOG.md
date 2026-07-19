@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.9
+
+- 重构：构建 / 烧录 / 调试 / SysConfig 流水线统一到 `WorkflowService`（命令面板与侧边栏共用）
+- 重构：插件设置读取收敛为 `readPluginSettings()`（`settingsService`）
+- 重构：工作区路径工具抽出为 `workspacePath`（`ProjectService` / `DebugService` 共用）
+- 重构：侧边栏 CSS/JS 拆分到 `media/sidebar/`，`sidebarHtml` 仅保留 HTML 壳与 CSP
+- 简化：工具链检测共用目录校验与版本读取逻辑
+- 简化：侧边栏前端设置与按钮改为表驱动，减少重复绑定代码
+- 清理：移除无用别名、重复 `pathBasename` / 串口服务重复实例化等冗余
+
 ## 0.6.8
 
 - 支持选择工作区内子文件夹作为工程根
@@ -8,10 +18,6 @@
 - 侧边栏新增「选择文件夹」「刷新列表」
 - 多工程列表改为可点击卡片（相对路径 + 芯片 + 当前高亮）
 - 按当前编辑器文件自动切换活动工程（`mspm0.autoSwitchProject`，默认开启）
-- 修复：父目录已是工程时不再停止扫描，可列出全部子工程
-- 修复：新建工程默认在所选目录内创建，不再强制再套一层子文件夹
-- 修复：子文件夹工程 IntelliSense 找不到 SDK 头文件（写入工作区根 `c_cpp_properties` + 绝对 SDK 路径）
-- 修复：侧边栏 webview 脚本因反斜杠转义错误导致无法交互（Tools/Project 停在 `--`）
 
 ## 0.6.7
 

@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { exists } from './pathUtil';
 
 export function ensureDir(dir: string): void {
 	fs.mkdirSync(dir, { recursive: true });
@@ -23,7 +24,7 @@ export function writeJsonFile(filePath: string, data: unknown): void {
 }
 
 export function copyFileIfMissing(src: string, dest: string): boolean {
-	if (fs.existsSync(dest)) {
+	if (exists(dest)) {
 		return false;
 	}
 	ensureDir(path.dirname(dest));
@@ -31,6 +32,7 @@ export function copyFileIfMissing(src: string, dest: string): boolean {
 	return true;
 }
 
+/** Alias of pathUtil.exists for project-layer readability. */
 export function pathExists(p: string): boolean {
-	return fs.existsSync(p);
+	return exists(p);
 }

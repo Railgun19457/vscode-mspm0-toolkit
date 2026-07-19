@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { firstExisting, toBackslash, toForward } from '../util/pathUtil';
+import { isPathInsideRoot, normalizeRoot, pathKey } from '../util/workspacePath';
 
 suite('pathUtil', () => {
 	test('toForward converts backslashes', () => {
@@ -21,5 +22,25 @@ suite('pathUtil', () => {
 		const hit = firstExisting([a, b]);
 		assert.ok(hit);
 		assert.ok(hit.replace(/\\/g, '/').endsWith('/b'));
+	});
+});
+
+suite('workspacePath', () => {
+	test('isPathInsideRoot accepts nested paths and rejects siblings', () => {
+		const root = normalizeRoot(path.join(os.tmpdir(), 'mspm0-ws-root'));
+		const child = path.join(root, 'apps', 'blink');
+		const sibling = path.join(path.dirname(root), 'other');
+		assert.strictEqual(isPathInsideRoot(child, root), true);
+		assert.strictEqual(isPathInsideRoot(root, root), true);
+		assert.strictEqual(isPathInsideRoot(sibling, root), false);
+	});
+
+	test('pathKey is case-insensitive on win32', () => {
+		if (process.platform !== 'win32') {
+			return;
+		}
+		const a = pathKey('E:/Code/App');
+		const b = pathKey('e:\\code\\app');
+		assert.strictEqual(a, b);
 	});
 });
