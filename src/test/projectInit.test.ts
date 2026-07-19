@@ -55,6 +55,14 @@ suite('ProjectService.initProject', () => {
 		const launch = JSON.parse(fs.readFileSync(path.join(tmp, '.vscode', 'launch.json'), 'utf8'));
 		const dbg = launch.configurations.find((c: any) => c.name === 'Debug (J-Link)');
 		assert.ok(String(dbg?.gdbPath || '').includes('${config:mspm0.gccPath}'));
+		const cpp = JSON.parse(fs.readFileSync(path.join(tmp, '.vscode', 'c_cpp_properties.json'), 'utf8'));
+		const cfg = cpp.configurations[0];
+		assert.ok(cfg.includePath.some((p: string) => p.includes('syscfg')));
+		// Absolute SDK path must be present (cpptools does not expand ${config:mspm0.sdkPath})
+		assert.ok(
+			cfg.includePath.some((p: string) => p.replace(/\\/g, '/').includes('mspm0_sdk') && p.replace(/\\/g, '/').endsWith('/source')),
+			JSON.stringify(cfg.includePath)
+		);
 		const mk = fs.readFileSync(path.join(tmp, 'Makefile'), 'utf8');
 		assert.ok(mk.includes('-include toolpaths.mk'));
 		const proj = JSON.parse(fs.readFileSync(path.join(tmp, 'mspm0.project.json'), 'utf8'));

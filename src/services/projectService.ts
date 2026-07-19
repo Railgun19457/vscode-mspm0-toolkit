@@ -8,6 +8,7 @@ import {
 	ProjectState,
 	TargetConfig,
 	ToolPaths,
+	WorkspaceFolderInfo,
 } from '../model/types';
 import { pathExists, readJsonFile, writeJsonFile, writeTextFile, ensureDir, copyFileIfMissing } from '../util/fsUtil';
 import { DeviceRegistry } from './deviceRegistry';
@@ -15,7 +16,25 @@ import { ConfigGenerator } from './configGenerator';
 
 export const PROJECT_FILE = 'mspm0.project.json';
 
+/** Directories skipped while scanning for nested projects. */
+const SCAN_SKIP_DIRS = new Set([
+	'.git',
+	'.svn',
+	'.hg',
+	'node_modules',
+	'build',
+	'dist',
+	'out',
+	'.vscode',
+	'.idea',
+	'__pycache__',
+	'.cache',
+	'Debug',
+	'Release',
+]);
+
 export class ProjectService {
+	/** Active project root (may be a workspace folder or any subfolder under it). */
 	private activeRoot?: string;
 
 	constructor(
@@ -24,26 +43,242 @@ export class ProjectService {
 		private readonly configGenerator: ConfigGenerator
 	) {}
 
-	listWorkspaceFolders(): Array<{ name: string; path: string; initialized: boolean }> {
+	/**
+	 * List selectable project roots for the sidebar:
+	 * - every VS Code workspace folder
+	 * - every nested directory that already contains mspm0.project.json
+	 *
+	 * Continues scanning under initialized parents so sibling/nested projects
+	 * (e.g. apps/a, apps/b under a workspace that itself has a project file) are found.
+	 */
+	listWorkspaceFolders(): WorkspaceFolderInfo[] {
 		const folders = vscode.workspace.workspaceFolders ?? [];
-		return folders.map((f) => ({
-			name: f.name,
-			path: f.uri.fsPath,
-			initialized: this.isInitialized(f.uri.fsPath),
-		}));
+		const byPath = new Map<string, WorkspaceFolderInfo>();
+
+		for (const f of folders) {
+			const abs = this.normalizeRoot(f.uri.fsPath);
+			const rootKey = this.pathKey(abs);
+			byPath.set(rootKey, this.enrichProjectInfo({
+				name: f.name,
+				path: abs,
+				initialized: this.isInitialized(abs),
+				relativePath: '.',
+				isWorkspaceRoot: true,
+				workspaceFolder: abs,
+			}));
+
+			for (const proj of this.scanProjectsUnder(abs, f.name)) {
+				const key = this.pathKey(proj.path);
+				if (byPath.has(key)) {
+					const existing = byPath.get(key)!;
+					// Keep workspace-root display name; upgrade initialized flag/meta.
+					byPath.set(key, this.enrichProjectInfo({
+						...existing,
+						initialized: existing.initialized || proj.initialized,
+						relativePath: existing.isWorkspaceRoot ? existing.relativePath : proj.relativePath,
+						workspaceFolder: existing.workspaceFolder || proj.workspaceFolder,
+						// Prefer shorter display name for nested projects when not workspace root
+						name: existing.isWorkspaceRoot ? existing.name : proj.name,
+						isWorkspaceRoot: existing.isWorkspaceRoot || proj.isWorkspaceRoot,
+						path: existing.path,
+					}));
+				} else {
+					byPath.set(key, this.enrichProjectInfo(proj));
+				}
+			}
+		}
+
+		// Ensure the currently selected root appears even if not yet initialized / not scanned.
+		if (this.activeRoot) {
+			const abs = this.normalizeRoot(this.activeRoot);
+			const key = this.pathKey(abs);
+			if (!byPath.has(key) && this.isPathInsideWorkspace(abs) && pathExists(abs)) {
+				const ws = this.getContainingWorkspaceFolder(abs);
+				const rel = ws
+					? path.relative(ws.uri.fsPath, abs).replace(/\\/g, '/') || '.'
+					: path.basename(abs);
+				byPath.set(key, this.enrichProjectInfo({
+					name: rel === '.' ? path.basename(abs) : rel,
+					path: abs,
+					initialized: this.isInitialized(abs),
+					relativePath: rel,
+					isWorkspaceRoot: false,
+					workspaceFolder: ws ? this.normalizeRoot(ws.uri.fsPath) : undefined,
+				}));
+			}
+		}
+
+		return Array.from(byPath.values()).sort((a, b) => {
+			// Initialized projects first, then by relative/display name
+			if (a.initialized !== b.initialized) {
+				return a.initialized ? -1 : 1;
+			}
+			// Prefer non-workspace-root entries when both initialized? Keep stable name sort.
+			return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+		});
 	}
 
+	/** Alias used by UI for clarity. */
+	listProjects(): WorkspaceFolderInfo[] {
+		return this.listWorkspaceFolders();
+	}
+
+	/**
+	 * True when `fileAbs` is the same as or inside `rootAbs` (Windows-safe).
+	 */
+	private isPathInsideRoot(fileAbs: string, rootAbs: string): boolean {
+		const fileKey = this.pathKey(fileAbs);
+		const rootKey = this.pathKey(rootAbs);
+		if (fileKey === rootKey) {
+			return true;
+		}
+		// path.relative avoids startsWith pitfalls (e.g. C:\proj vs C:\project)
+		const rel = path.relative(rootAbs, fileAbs);
+		if (!rel || rel === '') {
+			return true;
+		}
+		if (path.isAbsolute(rel)) {
+			return false;
+		}
+		if (rel === '..' || rel.startsWith('..' + path.sep) || rel.startsWith('../')) {
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * Find the best matching project root for a file path.
+	 * Prefers the deepest *initialized* project that contains the file;
+	 * falls back to the deepest listed root only when no initialized match exists.
+	 */
+	findProjectForFile(filePath: string | undefined): WorkspaceFolderInfo | undefined {
+		if (!filePath) {
+			return undefined;
+		}
+		// Reject non-fs paths / URI schemes if a raw URI was passed by mistake
+		const trimmed = String(filePath).trim();
+		if (!trimmed || /^(untitled|output|git|vscode-|walkThrough):/i.test(trimmed)) {
+			return undefined;
+		}
+		// Strip file:// if present
+		let raw = trimmed;
+		if (/^file:/i.test(raw)) {
+			try {
+				raw = vscode.Uri.parse(raw).fsPath;
+			} catch {
+				return undefined;
+			}
+		}
+
+		let abs: string;
+		try {
+			abs = this.normalizeRoot(raw);
+		} catch {
+			return undefined;
+		}
+
+		const candidates = this.listWorkspaceFolders();
+		if (!candidates.length) {
+			return undefined;
+		}
+
+		const matches = candidates.filter((p) => this.isPathInsideRoot(abs, p.path));
+		if (!matches.length) {
+			return undefined;
+		}
+
+		const score = (p: WorkspaceFolderInfo): [number, number] => {
+			// Higher is better: initialized first, then deeper (longer) path
+			return [p.initialized ? 1 : 0, this.pathKey(p.path).length];
+		};
+
+		matches.sort((a, b) => {
+			const sa = score(a);
+			const sb = score(b);
+			if (sa[0] !== sb[0]) {
+				return sb[0] - sa[0];
+			}
+			return sb[1] - sa[1];
+		});
+
+		return matches[0];
+	}
+
+	/**
+	 * Switch active project to the one owning filePath.
+	 * Returns the new root when switched, undefined when no change / no match.
+	 */
+	switchToProjectForFile(filePath: string | undefined): string | undefined {
+		const hit = this.findProjectForFile(filePath);
+		if (!hit) {
+			return undefined;
+		}
+		const current = this.getWorkspaceRoot();
+		if (current && this.pathKey(current) === this.pathKey(hit.path)) {
+			return undefined;
+		}
+		// Force active root even if path comparison earlier was stale
+		this.activeRoot = this.normalizeRoot(hit.path);
+		return this.activeRoot;
+	}
+
+	private enrichProjectInfo(info: WorkspaceFolderInfo): WorkspaceFolderInfo {
+		const abs = this.normalizeRoot(info.path);
+		const shortName = path.basename(abs) || info.name;
+		let device: string | undefined = info.device;
+		if (info.initialized) {
+			try {
+				const cfg = this.readConfig(abs);
+				device = cfg?.device || device;
+			} catch {
+				// ignore
+			}
+		}
+		// Prefer compact relative path for nested projects in the dropdown.
+		const rel = (info.relativePath || '.').replace(/\\/g, '/');
+		const display =
+			info.isWorkspaceRoot
+				? info.name
+				: rel && rel !== '.'
+					? rel
+					: shortName;
+		return {
+			...info,
+			path: abs,
+			name: display,
+			shortName,
+			device,
+		};
+	}
+
+	/**
+	 * Active project root used by build/flash/debug/init.
+	 * Accepts workspace folder roots and nested project folders.
+	 */
 	getWorkspaceRoot(): string | undefined {
 		const folders = vscode.workspace.workspaceFolders ?? [];
 		if (!folders.length) {
 			this.activeRoot = undefined;
 			return undefined;
 		}
-		if (this.activeRoot && folders.some((f) => f.uri.fsPath === this.activeRoot)) {
+
+		if (this.activeRoot) {
+			const abs = this.normalizeRoot(this.activeRoot);
+			if (this.isPathInsideWorkspace(abs)) {
+				this.activeRoot = abs;
+				return abs;
+			}
+		}
+
+		// Prefer an already-initialized project (nested or root).
+		const projects = this.listWorkspaceFolders();
+		const initialized = projects.find((p) => p.initialized);
+		if (initialized) {
+			this.activeRoot = initialized.path;
 			return this.activeRoot;
 		}
-		const initialized = folders.find((f) => this.isInitialized(f.uri.fsPath));
-		this.activeRoot = (initialized ?? folders[0]).uri.fsPath;
+
+		this.activeRoot = this.normalizeRoot(folders[0].uri.fsPath);
 		return this.activeRoot;
 	}
 
@@ -52,10 +287,165 @@ export class ProjectService {
 			this.activeRoot = undefined;
 			return;
 		}
+		const abs = this.normalizeRoot(root);
 		const folders = vscode.workspace.workspaceFolders ?? [];
-		if (folders.some((f) => f.uri.fsPath === root)) {
-			this.activeRoot = root;
+		// When a workspace is open, only accept paths inside it.
+		// With no workspace (unit tests / bare usage), still allow explicit roots.
+		if (folders.length && !this.isPathInsideWorkspace(abs)) {
+			return;
 		}
+		if (!pathExists(abs) || !fs.statSync(abs).isDirectory()) {
+			return;
+		}
+		this.activeRoot = abs;
+	}
+
+	/** Nearest VS Code workspace folder that contains the given path. */
+	getContainingWorkspaceFolder(projectRoot?: string): vscode.WorkspaceFolder | undefined {
+		const base = projectRoot ?? this.getWorkspaceRoot();
+		if (!base) {
+			return undefined;
+		}
+		const absKey = this.pathKey(base);
+		const folders = vscode.workspace.workspaceFolders ?? [];
+		let best: vscode.WorkspaceFolder | undefined;
+		let bestLen = -1;
+		for (const f of folders) {
+			const folderAbs = this.normalizeRoot(f.uri.fsPath);
+			const folderKey = this.pathKey(folderAbs);
+			if (
+				absKey === folderKey ||
+				absKey.startsWith(folderKey + path.sep) ||
+				absKey.startsWith(folderKey + '/')
+			) {
+				if (folderAbs.length > bestLen) {
+					best = f;
+					bestLen = folderAbs.length;
+				}
+			}
+		}
+		return best;
+	}
+
+	/**
+	 * Path of projectRoot relative to its VS Code workspace folder.
+	 * Returns '.' when projectRoot is the workspace folder itself.
+	 */
+	getProjectRelFromWorkspace(projectRoot?: string): string {
+		const base = projectRoot ?? this.getWorkspaceRoot();
+		if (!base) {
+			return '.';
+		}
+		const ws = this.getContainingWorkspaceFolder(base);
+		if (!ws) {
+			return '.';
+		}
+		const rel = path.relative(ws.uri.fsPath, base);
+		if (!rel || rel === '') {
+			return '.';
+		}
+		return rel.replace(/\\/g, '/');
+	}
+
+	isPathInsideWorkspace(target: string): boolean {
+		const absKey = this.pathKey(target);
+		const folders = vscode.workspace.workspaceFolders ?? [];
+		return folders.some((f) => {
+			const folderKey = this.pathKey(f.uri.fsPath);
+			const sep = path.sep;
+			return (
+				absKey === folderKey ||
+				absKey.startsWith(folderKey + sep) ||
+				absKey.startsWith(folderKey + '/')
+			);
+		});
+	}
+
+	private normalizeRoot(p: string): string {
+		return path.normalize(path.resolve(p));
+	}
+
+	/** Case-insensitive map key on Windows so E:\a and e:\a match. */
+	private pathKey(p: string): string {
+		const n = this.normalizeRoot(p);
+		return process.platform === 'win32' ? n.toLowerCase() : n;
+	}
+
+	/**
+	 * BFS scan for mspm0.project.json under a workspace folder.
+	 * Depth-limited to avoid expensive walks on huge trees.
+	 * Continues into subfolders even when the current dir is a project, so
+	 * monorepos with multiple projects under an initialized parent are listed.
+	 */
+	private scanProjectsUnder(workspaceRoot: string, workspaceName: string, maxDepth = 8): WorkspaceFolderInfo[] {
+		const results: WorkspaceFolderInfo[] = [];
+		const rootAbs = this.normalizeRoot(workspaceRoot);
+		const visited = new Set<string>();
+		const queue: Array<{ dir: string; depth: number }> = [{ dir: rootAbs, depth: 0 }];
+
+		while (queue.length) {
+			const { dir, depth } = queue.shift()!;
+			const dirAbs = this.normalizeRoot(dir);
+			const dirKey = this.pathKey(dirAbs);
+			if (visited.has(dirKey)) {
+				continue;
+			}
+			visited.add(dirKey);
+
+			const projectFile = path.join(dirAbs, PROJECT_FILE);
+			if (pathExists(projectFile)) {
+				const rel = path.relative(rootAbs, dirAbs).replace(/\\/g, '/') || '.';
+				const display =
+					rel === '.'
+						? workspaceName
+						: rel.includes('/')
+							? `${workspaceName}/${rel}`
+							: rel;
+				results.push({
+					name: display,
+					path: dirAbs,
+					initialized: true,
+					relativePath: rel,
+					isWorkspaceRoot: rel === '.',
+					workspaceFolder: rootAbs,
+				});
+				// Keep scanning children: sibling-level projects may sit under a
+				// parent that also has mspm0.project.json (common monorepo mistake).
+			}
+
+			if (depth >= maxDepth) {
+				continue;
+			}
+
+			let entries: fs.Dirent[];
+			try {
+				entries = fs.readdirSync(dirAbs, { withFileTypes: true });
+			} catch {
+				continue;
+			}
+			for (const entry of entries) {
+				// Some Node versions report symlinked dirs as isSymbolicLink only.
+				const isDir = entry.isDirectory() || entry.isSymbolicLink();
+				if (!isDir) {
+					continue;
+				}
+				if (SCAN_SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) {
+					continue;
+				}
+				const child = path.join(dirAbs, entry.name);
+				// Skip non-directories after following (e.g. symlink to file).
+				try {
+					if (!fs.statSync(child).isDirectory()) {
+						continue;
+					}
+				} catch {
+					continue;
+				}
+				queue.push({ dir: child, depth: depth + 1 });
+			}
+		}
+
+		return results;
 	}
 
 	getProjectFilePath(root?: string): string | undefined {
@@ -73,12 +463,13 @@ export class ProjectService {
 		if (!base) {
 			return { initialized: false };
 		}
+		const displayName = this.displayNameForRoot(base);
 		const file = path.join(base, PROJECT_FILE);
 		if (!pathExists(file)) {
 			return {
 				initialized: false,
 				root: base,
-				name: path.basename(base),
+				name: displayName,
 			};
 		}
 		try {
@@ -86,16 +477,25 @@ export class ProjectService {
 			return {
 				initialized: true,
 				root: base,
-				name: path.basename(base),
+				name: displayName,
 				config,
 			};
 		} catch {
 			return {
 				initialized: false,
 				root: base,
-				name: path.basename(base),
+				name: displayName,
 			};
 		}
+	}
+
+	/** Compact label: relative path under workspace when nested, else folder name. */
+	private displayNameForRoot(root: string): string {
+		const rel = this.getProjectRelFromWorkspace(root);
+		if (rel && rel !== '.') {
+			return rel.replace(/\\/g, '/');
+		}
+		return path.basename(root);
 	}
 
 	readConfig(root?: string): Mspm0ProjectFile | undefined {
@@ -167,7 +567,15 @@ export class ProjectService {
 		if (!base) {
 			throw new Error('请先打开一个工作区文件夹');
 		}
-		this.setWorkspaceRoot(base);
+		// Prefer selecting the new project as active when it sits inside the workspace.
+		// Outside-workspace creates (e.g. "新建工程" then open elsewhere) simply skip.
+		const abs = this.normalizeRoot(base);
+		if (this.isPathInsideWorkspace(abs)) {
+			this.activeRoot = abs;
+		} else if (!(vscode.workspace.workspaceFolders?.length)) {
+			// No VS Code workspace yet (unit tests / bare folder) — still remember the root.
+			this.activeRoot = abs;
+		}
 
 		const device = this.devices.get(target.device);
 		if (!device) {
@@ -203,7 +611,17 @@ export class ProjectService {
 		// Always refresh Makefile so probe/device flash rules stay correct
 		writeTextFile(path.join(base, 'Makefile'), this.defaultMakefile(project, device));
 
-		await this.configGenerator.generate(base, project, tools, device, this.extensionPath);
+		const rel = this.getProjectRelFromWorkspace(base);
+		const wsFolder = this.getContainingWorkspaceFolder(base);
+		await this.configGenerator.generate(
+			base,
+			project,
+			tools,
+			device,
+			this.extensionPath,
+			rel,
+			wsFolder?.uri.fsPath
+		);
 	}
 
 	async syncConfig(tools: ToolPaths, root?: string): Promise<void> {
@@ -223,7 +641,17 @@ export class ProjectService {
 		// Keep device files aligned when switching chips
 		this.applyDeviceFiles(base, device, tools.sdk);
 		writeTextFile(path.join(base, 'Makefile'), this.defaultMakefile(project, device));
-		await this.configGenerator.generate(base, project, tools, device, this.extensionPath);
+		const rel = this.getProjectRelFromWorkspace(base);
+		const wsFolder = this.getContainingWorkspaceFolder(base);
+		await this.configGenerator.generate(
+			base,
+			project,
+			tools,
+			device,
+			this.extensionPath,
+			rel,
+			wsFolder?.uri.fsPath
+		);
 	}
 
 	private applyDeviceFiles(base: string, device: DeviceInfo, sdkPath: string): void {

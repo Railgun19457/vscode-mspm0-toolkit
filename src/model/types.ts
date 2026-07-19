@@ -71,9 +71,21 @@ export interface DeviceInfo {
 }
 
 export interface WorkspaceFolderInfo {
+	/** Display label, e.g. "app_blink" or "ws/apps/foo" */
 	name: string;
+	/** Absolute project root path */
 	path: string;
 	initialized: boolean;
+	/** Path relative to nearest VS Code workspace folder */
+	relativePath?: string;
+	/** True when this entry is a VS Code workspace folder root */
+	isWorkspaceRoot?: boolean;
+	/** Containing VS Code workspace folder absolute path */
+	workspaceFolder?: string;
+	/** Short folder name (basename) for compact UI */
+	shortName?: string;
+	/** Device id from mspm0.project.json when initialized */
+	device?: string;
 }
 
 export interface ProjectState {
@@ -126,6 +138,10 @@ export interface PluginSettings {
 	 * When false (default), auto-open whenever an action produces output.
 	 */
 	openOutputOnError: boolean;
+	/**
+	 * When true (default), switch active MSPM0 project based on the file open in the editor.
+	 */
+	autoSwitchProject: boolean;
 }
 
 export interface SidebarState {
@@ -202,4 +218,5 @@ export const DEFAULT_PLUGIN_SETTINGS: PluginSettings = {
 	buildBeforeFlash: true,
 	buildBeforeDebug: true,
 	openOutputOnError: false,
+	autoSwitchProject: true,
 };

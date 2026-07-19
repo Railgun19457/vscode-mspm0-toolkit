@@ -81,4 +81,191 @@ suite('ProjectService multi-root and health', () => {
 		const ocd = fs.readFileSync(path.join(tmpA, '.vscode', 'openocd.cfg'), 'utf8');
 		assert.ok(ocd.includes('xds110'));
 	});
+
+	test('nested project under workspace uses ${workspaceFolder}/rel paths', async () => {
+		const vscode = require('./mocks/vscode');
+		const child = path.join(tmpA, 'apps', 'blink');
+		fs.mkdirSync(child, { recursive: true });
+		vscode.workspace.workspaceFolders = [
+			{ name: 'repo', uri: { fsPath: tmpA, path: tmpA } },
+		];
+		try {
+			await service.initProject({ ...DEFAULT_TARGET }, tools, child);
+			assert.ok(service.isInitialized(child));
+			assert.strictEqual(service.getProjectRelFromWorkspace(child).replace(/\\/g, '/'), 'apps/blink');
+
+			const launch = JSON.parse(fs.readFileSync(path.join(child, '.vscode', 'launch.json'), 'utf8'));
+			const dbg = launch.configurations.find((c: any) => c.name === 'Debug (J-Link)');
+			assert.ok(String(dbg?.cwd || '').includes('${workspaceFolder}/apps/blink'));
+			assert.ok(String(dbg?.executable || '').includes('${workspaceFolder}/apps/blink/'));
+
+			const tasks = JSON.parse(fs.readFileSync(path.join(child, '.vscode', 'tasks.json'), 'utf8'));
+			const build = tasks.tasks.find((t: any) => t.label === 'build');
+			assert.ok(String(build?.options?.cwd || '').includes('${workspaceFolder}/apps/blink'));
+
+			// IntelliSense: project-local + workspace-root c_cpp_properties with absolute SDK path
+			const childCpp = JSON.parse(fs.readFileSync(path.join(child, '.vscode', 'c_cpp_properties.json'), 'utf8'));
+			const childCfg = childCpp.configurations[0];
+			assert.ok(childCfg.includePath.some((p: string) => p.includes('/apps/blink/syscfg') || p.includes('${workspaceFolder}/apps/blink/syscfg')));
+			assert.ok(
+				childCfg.includePath.some((p: string) => p.replace(/\\/g, '/').includes('mspm0_sdk') && p.replace(/\\/g, '/').endsWith('/source')),
+				`expected absolute SDK include, got: ${JSON.stringify(childCfg.includePath)}`
+			);
+
+			assert.ok(fs.existsSync(path.join(tmpA, '.vscode', 'c_cpp_properties.json')));
+			const wsCpp = JSON.parse(fs.readFileSync(path.join(tmpA, '.vscode', 'c_cpp_properties.json'), 'utf8'));
+			assert.ok(wsCpp.configurations.some((c: any) => String(c.name || '').includes('apps/blink')));
+			const wsSettings = JSON.parse(fs.readFileSync(path.join(tmpA, '.vscode', 'settings.json'), 'utf8'));
+			assert.ok(Array.isArray(wsSettings['C_Cpp.default.includePath']));
+			assert.ok(
+				wsSettings['C_Cpp.default.includePath'].some(
+					(p: string) => p.replace(/\\/g, '/').includes('mspm0_sdk') && p.replace(/\\/g, '/').includes('/source')
+				)
+			);
+
+			const listed = service.listWorkspaceFolders();
+			assert.ok(listed.some((p) => path.normalize(p.path) === path.normalize(child) && p.initialized));
+			assert.ok(listed.some((p) => path.normalize(p.path) === path.normalize(tmpA)));
+		} finally {
+			vscode.workspace.workspaceFolders = undefined;
+		}
+	});
+
+	test('multiple nested projects can coexist and switch active root', async () => {
+		const vscode = require('./mocks/vscode');
+		const p1 = path.join(tmpA, 'proj_a');
+		const p2 = path.join(tmpA, 'proj_b');
+		fs.mkdirSync(p1, { recursive: true });
+		fs.mkdirSync(p2, { recursive: true });
+		vscode.workspace.workspaceFolders = [
+			{ name: 'mono', uri: { fsPath: tmpA, path: tmpA } },
+		];
+		try {
+			await service.initProject({ ...DEFAULT_TARGET, target: 'app_a' }, tools, p1);
+			await service.initProject({ ...DEFAULT_TARGET, target: 'app_b', device: 'MSPM0G3507' }, tools, p2);
+
+			const listed = service.listWorkspaceFolders().filter((p) => p.initialized);
+			assert.ok(listed.length >= 2);
+			assert.ok(listed.some((p) => path.normalize(p.path) === path.normalize(p1)));
+			assert.ok(listed.some((p) => path.normalize(p.path) === path.normalize(p2)));
+
+			service.setWorkspaceRoot(p1);
+			assert.strictEqual(path.normalize(service.getWorkspaceRoot()!), path.normalize(p1));
+			assert.strictEqual(service.readConfig()?.target, 'app_a');
+
+			service.setWorkspaceRoot(p2);
+			assert.strictEqual(path.normalize(service.getWorkspaceRoot()!), path.normalize(p2));
+			assert.strictEqual(service.readConfig()?.target, 'app_b');
+		} finally {
+			vscode.workspace.workspaceFolders = undefined;
+		}
+	});
+
+	test('scan finds many sibling projects and under initialized parent', async () => {
+		const vscode = require('./mocks/vscode');
+		// Workspace root itself is a project AND has multiple children that are projects.
+		// Old scanner stopped at parent and only listed ~2 entries.
+		const names = ['alpha', 'beta', 'gamma', 'delta', 'epsilon'];
+		for (const n of names) {
+			fs.mkdirSync(path.join(tmpA, 'apps', n), { recursive: true });
+		}
+		vscode.workspace.workspaceFolders = [
+			{ name: 'mono', uri: { fsPath: tmpA, path: tmpA } },
+		];
+		try {
+			await service.initProject({ ...DEFAULT_TARGET, target: 'root_app' }, tools, tmpA);
+			for (const n of names) {
+				await service.initProject(
+					{ ...DEFAULT_TARGET, target: n },
+					tools,
+					path.join(tmpA, 'apps', n)
+				);
+			}
+			const listed = service.listWorkspaceFolders().filter((p) => p.initialized);
+			// root + 5 children
+			assert.ok(listed.length >= 6, `expected >=6 projects, got ${listed.length}: ${listed.map((p) => p.name).join(', ')}`);
+			for (const n of names) {
+				const full = path.normalize(path.join(tmpA, 'apps', n));
+				assert.ok(
+					listed.some((p) => path.normalize(p.path) === full),
+					`missing project ${n}`
+				);
+			}
+		} finally {
+			vscode.workspace.workspaceFolders = undefined;
+		}
+	});
+
+	test('setWorkspaceRoot rejects paths outside workspace when workspace is open', async () => {
+		const vscode = require('./mocks/vscode');
+		vscode.workspace.workspaceFolders = [
+			{ name: 'ws', uri: { fsPath: tmpA, path: tmpA } },
+		];
+		try {
+			service.setWorkspaceRoot(tmpA);
+			assert.strictEqual(path.normalize(service.getWorkspaceRoot()!), path.normalize(tmpA));
+			service.setWorkspaceRoot(tmpB);
+			// Outside path ignored; active root stays tmpA
+			assert.strictEqual(path.normalize(service.getWorkspaceRoot()!), path.normalize(tmpA));
+		} finally {
+			vscode.workspace.workspaceFolders = undefined;
+		}
+	});
+
+	test('findProjectForFile prefers deepest initialized project', async () => {
+		const vscode = require('./mocks/vscode');
+		const p1 = path.join(tmpA, 'apps', 'blink');
+		const p2 = path.join(tmpA, 'apps', 'uart');
+		fs.mkdirSync(path.join(p1, 'src'), { recursive: true });
+		fs.mkdirSync(path.join(p2, 'src'), { recursive: true });
+		vscode.workspace.workspaceFolders = [
+			{ name: 'mono', uri: { fsPath: tmpA, path: tmpA } },
+		];
+		try {
+			await service.initProject({ ...DEFAULT_TARGET, target: 'blink' }, tools, p1);
+			await service.initProject({ ...DEFAULT_TARGET, target: 'uart' }, tools, p2);
+
+			const fileInP1 = path.join(p1, 'src', 'main.c');
+			const hit = service.findProjectForFile(fileInP1);
+			assert.ok(hit);
+			assert.strictEqual(path.normalize(hit!.path), path.normalize(p1));
+
+			const fileInP2 = path.join(p2, 'syscfg', 'app.syscfg');
+			const hit2 = service.findProjectForFile(fileInP2);
+			assert.ok(hit2);
+			assert.strictEqual(path.normalize(hit2!.path), path.normalize(p2));
+
+			// Root project + nested: file under nested must not stick to root
+			await service.initProject({ ...DEFAULT_TARGET, target: 'root' }, tools, tmpA);
+			const nestedHit = service.findProjectForFile(fileInP1);
+			assert.ok(nestedHit);
+			assert.strictEqual(path.normalize(nestedHit!.path), path.normalize(p1));
+
+			// Case-insensitive / mixed separators (Windows-like)
+			const mixed = fileInP1.replace(/\\/g, '/');
+			const mixedHit = service.findProjectForFile(mixed);
+			assert.ok(mixedHit);
+			assert.strictEqual(path.normalize(mixedHit!.path), path.normalize(p1));
+
+			// Switching
+			service.setWorkspaceRoot(p1);
+			const switched = service.switchToProjectForFile(fileInP2);
+			assert.ok(switched);
+			assert.strictEqual(path.normalize(switched!), path.normalize(p2));
+			// Same project → no switch
+			assert.strictEqual(service.switchToProjectForFile(fileInP2), undefined);
+
+			// Display: nested projects use relative path as name
+			const listed = service.listWorkspaceFolders().filter((p) => p.initialized);
+			const blinkInfo = listed.find((p) => path.normalize(p.path) === path.normalize(p1));
+			assert.ok(blinkInfo);
+			assert.ok(
+				blinkInfo!.name.includes('apps/blink') || blinkInfo!.name.includes('apps\\blink') || blinkInfo!.name === 'apps/blink',
+				`unexpected name: ${blinkInfo!.name}`
+			);
+			assert.strictEqual(blinkInfo!.device, 'MSPM0G3507');
+		} finally {
+			vscode.workspace.workspaceFolders = undefined;
+		}
+	});
 });

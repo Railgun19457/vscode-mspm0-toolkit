@@ -2,7 +2,7 @@
   "name": "mspm0-toolkit",
   "displayName": "MSPM0 Toolkit",
   "description": "TI MSPM0 full-workflow toolkit for VS Code: sidebar console, toolchain setup, project init, build, flash, debug, SysConfig",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "publisher": "Railgun19457",
   "engines": {
     "vscode": "^1.85.0"
@@ -260,6 +260,11 @@
           "type": "boolean",
           "default": false,
           "description": "仅出错时自动打开输出窗口。默认关闭：有输出就打开；启用后成功只提示状态栏，失败才打开输出"
+        },
+        "mspm0.autoSwitchProject": {
+          "type": "boolean",
+          "default": true,
+          "description": "根据当前编辑器打开的文件自动切换活动 MSPM0 工程（多工程时匹配最近的工程根）"
         }
       }
     },

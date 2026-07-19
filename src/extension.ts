@@ -249,9 +249,14 @@ export function activate(context: vscode.ExtensionContext): void {
 				await toolPaths.applyDetected(detected, false);
 			}
 			await sidebar.refreshDoctorAndPush();
+			// Align active project with the file currently open in the editor.
+			await sidebar.maybeAutoSwitchProject();
 		})();
 	} else {
-		void sidebar.refreshDoctorAndPush();
+		void (async () => {
+			await sidebar.refreshDoctorAndPush();
+			await sidebar.maybeAutoSwitchProject();
+		})();
 	}
 
 	logInfo('MSPM0 Toolkit activated');

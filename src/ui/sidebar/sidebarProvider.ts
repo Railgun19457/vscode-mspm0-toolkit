@@ -37,6 +37,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private doctorCache?: SidebarState['doctor'];
 	private healthCache?: SidebarState['health'];
 	private page: SidebarPage = 'console';
+	/** Suppress auto-switch noise when user just picked a project manually. */
+	private suppressAutoSwitchUntil = 0;
+	private autoSwitchTimer?: ReturnType<typeof setTimeout>;
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
@@ -56,6 +59,100 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		if (cfgProbe === 'jlink' || cfgProbe === 'openocd' || cfgProbe === 'xds110' || cfgProbe === 'cmsis-dap') {
 			this.targetDraft.probe = cfgProbe as ProbeType;
 		}
+
+		// Auto-switch project when active editor / tab changes (debounced).
+		context.subscriptions.push(
+			vscode.window.onDidChangeActiveTextEditor((editor) => {
+				void this.maybeAutoSwitchProject(this.filePathFromEditor(editor));
+			}),
+			vscode.window.tabGroups.onDidChangeTabs(() => {
+				void this.maybeAutoSwitchProject(this.filePathFromEditor(vscode.window.activeTextEditor));
+			}),
+			vscode.workspace.onDidOpenTextDocument((doc) => {
+				if (doc.uri.scheme !== 'file') {
+					return;
+				}
+				if (vscode.window.activeTextEditor?.document?.uri.toString() === doc.uri.toString()) {
+					void this.maybeAutoSwitchProject(doc.uri.fsPath);
+				}
+			})
+		);
+	}
+
+	/** Extract a filesystem path from an editor / text document (file scheme only). */
+	private filePathFromEditor(editor?: vscode.TextEditor): string | undefined {
+		const doc = editor?.document;
+		if (!doc) {
+			return undefined;
+		}
+		if (doc.uri.scheme !== 'file') {
+			return undefined;
+		}
+		return doc.uri.fsPath || doc.fileName;
+	}
+
+	/**
+	 * Switch active project to the one owning the given file (if setting enabled).
+	 * Debounced; quiet when busy or user just switched manually.
+	 */
+	async maybeAutoSwitchProject(filePath?: string): Promise<void> {
+		if (this.busyAction) {
+			return;
+		}
+		if (Date.now() < this.suppressAutoSwitchUntil) {
+			return;
+		}
+		const enabled = this.readPluginSettings().autoSwitchProject;
+		if (!enabled) {
+			return;
+		}
+		const pathToMatch =
+			filePath ||
+			this.filePathFromEditor(vscode.window.activeTextEditor);
+		if (!pathToMatch) {
+			return;
+		}
+
+		if (this.autoSwitchTimer) {
+			clearTimeout(this.autoSwitchTimer);
+		}
+		// Capture path in closure; re-read active editor at fire time for latest file.
+		const requested = pathToMatch;
+		this.autoSwitchTimer = setTimeout(() => {
+			this.autoSwitchTimer = undefined;
+			const latest =
+				this.filePathFromEditor(vscode.window.activeTextEditor) || requested;
+			void this.runAutoSwitch(latest);
+		}, 80);
+	}
+
+	private async runAutoSwitch(filePath: string): Promise<void> {
+		if (this.busyAction || Date.now() < this.suppressAutoSwitchUntil) {
+			return;
+		}
+		if (!this.readPluginSettings().autoSwitchProject) {
+			return;
+		}
+		const hit = this.projects.findProjectForFile(filePath);
+		if (!hit) {
+			return;
+		}
+		const switched = this.projects.switchToProjectForFile(filePath);
+		if (!switched) {
+			// Already on the matching project — no UI change needed
+			return;
+		}
+		this.healthCache = undefined;
+		const name = hit.name || pathBasename(switched);
+		this.setMessage(`已自动切换工程: ${name}`, 'info');
+		this.statusBar?.setAction(`工程: ${name}`, 'info', 2500);
+		await this.pushState();
+	}
+
+	/** Call after user manually selects a project so auto-switch does not fight them. */
+	private bumpManualProjectPick(): void {
+		// Short suppress so auto-switch still feels responsive after a manual click
+		this.suppressAutoSwitchUntil = Date.now() + 800;
 	}
 
 	resolveWebviewView(
@@ -215,10 +312,20 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 				await this.handleTargetConfig(msg.payload);
 				return;
 			case 'setWorkspaceFolder':
+				this.bumpManualProjectPick();
 				this.projects.setWorkspaceRoot(msg.payload.path);
 				this.healthCache = undefined;
 				await this.refreshDoctorAndPush();
-				this.setMessage('已切换工作区文件夹', 'info');
+				this.setMessage('已切换当前工程', 'info');
+				await this.pushState();
+				return;
+			case 'pickProjectFolder':
+				await this.handlePickProjectFolder();
+				return;
+			case 'refreshProjects':
+				this.healthCache = undefined;
+				await this.refreshDoctorAndPush();
+				this.setMessage('已刷新工程列表', 'info');
 				await this.pushState();
 				return;
 			case 'healthCheck':
@@ -314,30 +421,111 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
 
 
+	/**
+	 * Let the user pick any subfolder inside the current VS Code workspace
+	 * and use it as the active project root (for init / multi-project).
+	 */
+	private async handlePickProjectFolder(): Promise<void> {
+		const folders = vscode.workspace.workspaceFolders ?? [];
+		if (!folders.length) {
+			throw new Error('请先打开一个工作区文件夹');
+		}
+		const defaultUri = vscode.Uri.file(this.projects.getWorkspaceRoot() || folders[0].uri.fsPath);
+		const picked = await vscode.window.showOpenDialog({
+			canSelectFiles: false,
+			canSelectFolders: true,
+			canSelectMany: false,
+			defaultUri,
+			openLabel: '选择为工程根目录',
+			title: '选择工作区内的工程文件夹',
+		});
+		if (!picked?.[0]) {
+			return;
+		}
+		const target = picked[0].fsPath;
+		if (!this.projects.isPathInsideWorkspace(target)) {
+			this.setMessage('只能选择当前工作区内的文件夹', 'error');
+			await this.pushState();
+			return;
+		}
+		this.bumpManualProjectPick();
+		this.projects.setWorkspaceRoot(target);
+		this.healthCache = undefined;
+		const initialized = this.projects.isInitialized(target);
+		await this.refreshDoctorAndPush();
+		this.setMessage(
+			initialized ? `已切换到工程: ${target}` : `已选择工程根: ${target}（尚未初始化）`,
+			initialized ? 'success' : 'info'
+		);
+		await this.pushState();
+	}
+
 	private async handleCreateProject(): Promise<void> {
+		const pathMod = await import('path');
+		const fsMod = await import('fs');
+		const wsFolders = vscode.workspace.workspaceFolders ?? [];
+		const defaultParent = this.projects.getWorkspaceRoot() || wsFolders[0]?.uri.fsPath;
+
+		// Step 1: choose mode — init in selected folder, or create a named subfolder under parent.
+		const mode = await vscode.window.showQuickPick(
+			[
+				{
+					label: '在所选文件夹中创建',
+					description: '推荐',
+					detail: '选择的目录即为工程根（例如选 /Project/test1 → 工程就是 /Project/test1）',
+					mode: 'inplace' as const,
+				},
+				{
+					label: '在父目录下新建子文件夹',
+					description: '可选',
+					detail: '先选父目录，再输入子文件夹名（例如选 /Project + 名称 test1 → /Project/test1）',
+					mode: 'subdir' as const,
+				},
+			],
+			{ title: '新建工程', placeHolder: '选择创建方式', ignoreFocusOut: true }
+		);
+		if (!mode) {
+			return;
+		}
+
 		const folderUri = await vscode.window.showOpenDialog({
 			canSelectFiles: false,
 			canSelectFolders: true,
 			canSelectMany: false,
-			openLabel: '选择新建工程父目录',
+			defaultUri: defaultParent ? vscode.Uri.file(defaultParent) : undefined,
+			openLabel: mode.mode === 'inplace' ? '选择工程目录' : '选择父目录',
+			title:
+				mode.mode === 'inplace'
+					? '新建工程 — 选择工程根目录'
+					: '新建工程 — 选择父目录',
 		});
 		if (!folderUri?.[0]) {
 			return;
 		}
-		const name = await vscode.window.showInputBox({
-			prompt: '工程名称',
-			value: 'mspm0_app',
-			validateInput: (v) => (!v || /[<>:"/\\|?*]/.test(v) ? '名称无效' : undefined),
-		});
-		if (!name) {
-			return;
+
+		let targetRoot = folderUri[0].fsPath;
+		let displayName = pathMod.basename(targetRoot);
+
+		if (mode.mode === 'subdir') {
+			const name = await vscode.window.showInputBox({
+				prompt: '子文件夹名称（将在所选父目录下创建）',
+				value: 'mspm0_app',
+				validateInput: (v) => (!v || /[<>:"/\\|?*]/.test(v) ? '名称无效' : undefined),
+				ignoreFocusOut: true,
+			});
+			if (!name) {
+				return;
+			}
+			targetRoot = pathMod.join(folderUri[0].fsPath, name);
+			displayName = name;
 		}
-		const pathMod = await import('path');
-		const fsMod = await import('fs');
-		const targetRoot = pathMod.join(folderUri[0].fsPath, name);
+
 		if (fsMod.existsSync(targetRoot) && fsMod.readdirSync(targetRoot).length) {
+			const already = this.projects.isInitialized(targetRoot);
 			const ok = await vscode.window.showWarningMessage(
-				`目录非空，仍要初始化吗？\n${targetRoot}`,
+				already
+					? `目录已是 MSPM0 工程，将补齐缺失文件:\n${targetRoot}`
+					: `目录非空，仍要在此初始化吗？\n${targetRoot}`,
 				{ modal: true },
 				'继续'
 			);
@@ -352,14 +540,31 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		try {
 			await this.projects.initProject(this.targetDraft, this.toolPaths.getPaths(), targetRoot);
 			this.healthCache = undefined;
-			const open = await vscode.window.showInformationMessage(
-				`工程已创建: ${targetRoot}`,
-				'打开文件夹'
-			);
-			if (open === '打开文件夹') {
-				await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(targetRoot), true);
+this.bumpManualProjectPick();
+			
+			const insideWs = this.projects.isPathInsideWorkspace(targetRoot);
+			if (insideWs) {
+				this.projects.setWorkspaceRoot(targetRoot);
+				this.setMessage(`新建工程完成并已切换: ${targetRoot}`, 'success');
+				vscode.window.showInformationMessage(`MSPM0 工程已创建并切换为当前工程:\n${targetRoot}`);
+			} else {
+				const open = await vscode.window.showInformationMessage(
+					`工程已创建（在工作区外）: ${targetRoot}`,
+					'在新窗口打开',
+					'添加到工作区'
+				);
+				if (open === '在新窗口打开') {
+					await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(targetRoot), true);
+				} else if (open === '添加到工作区') {
+					const start = vscode.workspace.workspaceFolders?.length ?? 0;
+					vscode.workspace.updateWorkspaceFolders(start, 0, {
+						uri: vscode.Uri.file(targetRoot),
+						name: displayName,
+					});
+					this.projects.setWorkspaceRoot(targetRoot);
+				}
+				this.setMessage(`新建工程完成: ${targetRoot}`, 'success');
 			}
-			this.setMessage(`新建工程完成: ${targetRoot}`, 'success');
 		} finally {
 			this.busyAction = undefined;
 			await this.refreshDoctorAndPush();
@@ -431,6 +636,7 @@ ${root}`,
 		this.statusBar?.setAction('初始化工程…', 'running');
 		await this.pushState();
 		try {
+			this.bumpManualProjectPick();
 			await this.projects.initProject(this.targetDraft, this.toolPaths.getPaths(), root);
 			this.healthCache = undefined;
 			this.setMessage(`工程初始化完成: ${root}`, 'success');
@@ -570,6 +776,7 @@ ${root}`,
 			autoSyscfgOnBuild: cfg.get<boolean>('autoSyscfgOnBuild', DEFAULT_PLUGIN_SETTINGS.autoSyscfgOnBuild),
 			buildBeforeFlash: cfg.get<boolean>('buildBeforeFlash', DEFAULT_PLUGIN_SETTINGS.buildBeforeFlash),
 			buildBeforeDebug: cfg.get<boolean>('buildBeforeDebug', DEFAULT_PLUGIN_SETTINGS.buildBeforeDebug),
+			autoSwitchProject: cfg.get<boolean>('autoSwitchProject', DEFAULT_PLUGIN_SETTINGS.autoSwitchProject),
 			openOutputOnError: cfg.get<boolean>('openOutputOnError', DEFAULT_PLUGIN_SETTINGS.openOutputOnError),
 		};
 	}
@@ -603,4 +810,10 @@ function getNonce(): string {
 		id += chars.charAt(Math.floor(Math.random() * chars.length));
 	}
 	return id;
+}
+
+function pathBasename(p: string): string {
+	const norm = p.replace(/\\/g, '/');
+	const parts = norm.split('/').filter(Boolean);
+	return parts[parts.length - 1] || p;
 }

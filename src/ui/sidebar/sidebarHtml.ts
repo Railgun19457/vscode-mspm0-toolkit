@@ -126,6 +126,119 @@ return `<!DOCTYPE html>
     .msg.info { border-color: var(--vscode-focusBorder, #007acc); }
     .hidden { display: none; }
     .footer-hint { font-size: 10px; opacity: .65; margin-top: 8px; line-height: 1.4; }
+    .project-list-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      margin-bottom: 6px; font-size: 11px; opacity: .85;
+    }
+    .project-list-head .count { opacity: .75; }
+    .project-list {
+      display: flex; flex-direction: column; gap: 6px;
+      max-height: 220px; overflow-y: auto; margin-bottom: 8px;
+      padding: 1px;
+    }
+    .project-list:empty::after {
+      content: '未发现工程 — 可用「选择文件夹」或「新建工程」';
+      display: block; font-size: 11px; opacity: .65; padding: 8px 6px; text-align: center;
+    }
+    /* Use div cards (not <button>) so global button styles cannot break layout. */
+    .project-item {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      box-sizing: border-box;
+      margin: 0;
+      padding: 8px 9px;
+      border: 1px solid var(--vscode-widget-border, #333);
+      border-radius: 7px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-foreground);
+      cursor: pointer;
+      user-select: none;
+      outline: none;
+      min-height: 44px;
+    }
+    .project-item:hover {
+      border-color: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 45%, var(--vscode-widget-border, #333));
+      background: color-mix(in srgb, var(--vscode-list-hoverBackground, #2a2d2e) 80%, var(--vscode-input-background));
+    }
+    .project-item.active {
+      border-color: var(--vscode-focusBorder, #007acc);
+      background: color-mix(in srgb, var(--vscode-list-activeSelectionBackground, #094771) 50%, var(--vscode-input-background));
+    }
+    .project-item.disabled {
+      opacity: .5; cursor: not-allowed; pointer-events: none;
+    }
+    .project-item .dot {
+      flex: 0 0 8px;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--vscode-descriptionForeground, #888);
+    }
+    .project-item .dot.ok { background: var(--vscode-testing-iconPassed, #3ba55d); }
+    .project-item .dot.warn { background: var(--vscode-editorWarning-foreground, #cca700); }
+    .project-item .main {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: block;
+      overflow: hidden;
+    }
+    .project-item .title-line {
+      display: block;
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .project-item .sub-line {
+      display: block;
+      margin-top: 2px;
+      font-size: 10px;
+      line-height: 1.35;
+      opacity: .72;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .project-item .side {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 4px;
+      max-width: 40%;
+    }
+    .project-item .active-tag {
+      display: none;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1;
+      color: var(--vscode-button-foreground, #fff);
+      background: var(--vscode-focusBorder, #007acc);
+      border-radius: 999px;
+      padding: 3px 7px;
+      white-space: nowrap;
+    }
+    .project-item.active .active-tag { display: inline-block; }
+    .project-item .chip {
+      display: inline-block;
+      font-size: 10px;
+      line-height: 1;
+      opacity: .95;
+      padding: 3px 6px;
+      border-radius: 999px;
+      border: 1px solid var(--vscode-widget-border, #444);
+      white-space: nowrap;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .project-item.active .chip {
+      border-color: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 55%, transparent);
+    }
   </style>
 </head>
 <body>
@@ -163,9 +276,14 @@ return `<!DOCTYPE html>
     <details class="section" open>
       <summary>工程</summary>
       <div class="body">
-        <div class="row simple">
-          <label for="workspaceFolder">工作区</label>
-          <select id="workspaceFolder"></select>
+        <div class="project-list-head">
+          <span>工程列表</span>
+          <span class="count" id="projectCount"></span>
+        </div>
+        <div class="project-list" id="projectList" role="listbox" aria-label="MSPM0 工程列表"></div>
+        <div class="btn-row" style="margin-top:0">
+          <button id="btnPickFolder" class="secondary" title="在工作区内选择子文件夹作为工程根">选择文件夹</button>
+          <button id="btnRefreshProjects" class="secondary" title="重新扫描工作区内的 MSPM0 工程">刷新列表</button>
         </div>
         <div class="meta" id="projectMeta">未打开工作区</div>
         <div class="meta" id="healthMeta"></div>
@@ -175,6 +293,7 @@ return `<!DOCTYPE html>
           <button id="btnSync" class="secondary">同步配置</button>
           <button id="btnHealth" class="secondary">健康检查</button>
         </div>
+        <div class="footer-hint">点击列表切换工程；打开源文件可自动切换（配置页可关）；新建默认在所选目录内创建</div>
       </div>
     </details>
 
@@ -244,6 +363,13 @@ return `<!DOCTYPE html>
             <div class="desc">默认有输出就打开；启用后成功只提示状态栏，失败才打开输出</div>
           </div>
           <input id="optOpenOutputOnError" type="checkbox" />
+        </div>
+        <div class="row toggle">
+          <div>
+            <label for="optAutoSwitchProject">按编辑器自动切换工程</label>
+            <div class="desc">打开/切换文件时，自动选中包含该文件的最近 MSPM0 工程根（默认开启）</div>
+          </div>
+          <input id="optAutoSwitchProject" type="checkbox" />
         </div>
       </div>
     </details>
@@ -406,36 +532,115 @@ return `<!DOCTYPE html>
     }
 
     function render(s) {
+      if (!s) return;
       state = s;
       suppress = true;
+      try {
       applyPage(s.page || currentPage || 'console');
-
+      const project = s.project || { initialized: false };
+      const target = s.target || {};
       const toolsOk = s.doctor ? s.doctor.ok : false;
       $('toolsBadge').textContent = toolsOk ? 'Tools: Ready' : 'Tools: Check';
       $('toolsBadge').className = 'badge ' + (toolsOk ? 'ok' : 'warn');
-      $('projectBadge').textContent = s.project.initialized ? 'Project: OK' : 'Project: 未初始化';
-      $('projectBadge').className = 'badge ' + (s.project.initialized ? 'ok' : 'warn');
+      const shortProj = project.name || '';
+      $('projectBadge').textContent = project.initialized
+        ? ('Project: ' + (shortProj || 'OK'))
+        : 'Project: 未初始化';
+      $('projectBadge').className = 'badge ' + (project.initialized ? 'ok' : 'warn');
       setBusy(s.busyAction || '');
 
-      // workspace
-      const wsSel = $('workspaceFolder');
-      if (wsSel) {
-        wsSel.innerHTML = '';
-        const folders = s.workspaceFolders || [];
-        if (!folders.length) {
-          const opt = document.createElement('option');
-          opt.value = ''; opt.textContent = '(无工作区)';
-          wsSel.appendChild(opt); wsSel.disabled = true;
-        } else {
-          wsSel.disabled = false;
-          folders.forEach((f) => {
-            const opt = document.createElement('option');
-            opt.value = f.path;
-            opt.textContent = (f.initialized ? '✓ ' : '') + f.name;
-            wsSel.appendChild(opt);
+      // Project list (cards) — not a <select>
+      // NOTE: embedded in TS template literal; backslashes must be doubled for webview JS.
+      const listEl = $('projectList');
+      const countEl = $('projectCount');
+      const folders = s.workspaceFolders || [];
+      const current = s.workspaceFolder || project.root || '';
+      const norm = (p) => String(p || '').replace(/\\\\/g, '/').toLowerCase();
+      const currentN = norm(current);
+      const initCount = folders.filter((f) => f.initialized).length;
+      if (countEl) {
+        countEl.textContent = folders.length
+          ? (initCount + '/' + folders.length + ' 已初始化')
+          : '';
+      }
+      if (listEl) {
+        listEl.innerHTML = '';
+        const items = folders.slice();
+        // Ensure current selection appears even if not in scan results
+        if (current && !items.some((f) => norm(f.path) === currentN)) {
+          const parts = current.replace(/\\\\/g, '/').split('/');
+          items.unshift({
+            path: current,
+            name: parts[parts.length - 1] || current,
+            shortName: parts[parts.length - 1] || current,
+            initialized: !!project.initialized,
+            device: (project.config && project.config.device) || target.device || '',
           });
-          wsSel.value = s.workspaceFolder || folders[0].path;
         }
+        items.forEach((f) => {
+          const isActive = norm(f.path) === currentN;
+          // div card (not button) — avoids VS Code webview global button CSS collisions
+          const card = document.createElement('div');
+          card.className = 'project-item'
+            + (isActive ? ' active' : '')
+            + (s.busyAction ? ' disabled' : '');
+          card.setAttribute('role', 'option');
+          card.setAttribute('aria-selected', isActive ? 'true' : 'false');
+          card.tabIndex = s.busyAction ? -1 : 0;
+          card.dataset.path = f.path;
+          card.title = f.path;
+
+          const dot = document.createElement('span');
+          dot.className = 'dot ' + (f.initialized ? 'ok' : 'warn');
+
+          const main = document.createElement('div');
+          main.className = 'main';
+          const titleLine = document.createElement('span');
+          titleLine.className = 'title-line';
+          titleLine.textContent = f.name || f.shortName || f.path || '';
+          const subLine = document.createElement('span');
+          subLine.className = 'sub-line';
+          const status = f.initialized ? '已初始化' : '未初始化';
+          const shortPath = (f.relativePath && f.relativePath !== '.')
+            ? f.relativePath
+            : (f.shortName || f.name || '');
+          subLine.textContent = status + (shortPath ? (' · ' + shortPath) : '');
+          main.appendChild(titleLine);
+          main.appendChild(subLine);
+
+          const side = document.createElement('div');
+          side.className = 'side';
+          if (isActive) {
+            const tag = document.createElement('span');
+            tag.className = 'active-tag';
+            tag.textContent = '当前';
+            side.appendChild(tag);
+          }
+          if (f.device || f.initialized) {
+            const chip = document.createElement('span');
+            chip.className = 'chip';
+            chip.textContent = f.device || 'MSPM0';
+            chip.title = f.device || '';
+            side.appendChild(chip);
+          }
+
+          card.appendChild(dot);
+          card.appendChild(main);
+          card.appendChild(side);
+
+          const activate = () => {
+            if (suppress || s.busyAction || isActive) return;
+            post('setWorkspaceFolder', { path: f.path });
+          };
+          card.addEventListener('click', activate);
+          card.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              activate();
+            }
+          });
+          listEl.appendChild(card);
+        });
       }
 
       const healthEl = $('healthMeta');
@@ -443,15 +648,22 @@ return `<!DOCTYPE html>
         healthEl.textContent = (s.health && s.health.issues && s.health.issues.length)
           ? s.health.issues.map((i) => i.message).join(' | ') : '';
       }
-      const root = s.workspaceFolder || s.project.root || '(无工作区)';
-      const name = s.project.name || '';
-      $('projectMeta').textContent = s.project.initialized
-        ? ('工程: ' + name + ' | ' + root + ' | device=' + (s.project.config?.device || s.target.device))
-        : ('未初始化 | ' + root);
+      const root = s.workspaceFolder || project.root || '(无工作区)';
+      const name = project.name || '';
+      const multi = initCount;
+      const multiHint = multi > 0 ? (' · 共 ' + multi + ' 个工程') : '';
+      const autoHint = (s.settings && s.settings.autoSwitchProject !== false) ? ' · 自动切换开' : '';
+      const deviceLabel = (project.config && project.config.device) || target.device || '';
+      if ($('projectMeta')) {
+        $('projectMeta').textContent = project.initialized
+          ? ('当前: ' + name + (deviceLabel ? (' · ' + deviceLabel) : '') + multiHint + autoHint)
+          : ('未初始化 · ' + (name || root) + multiHint + autoHint);
+        $('projectMeta').title = root;
+      }
 
       // devices/target
       allDevices = s.devices || [];
-      selectedDevice = s.target.device || selectedDevice || '';
+      selectedDevice = target.device || selectedDevice || '';
       const deviceField = $('device');
       if (deviceField) {
         const current = String(deviceField.value || '').trim();
@@ -462,38 +674,44 @@ return `<!DOCTYPE html>
         } else fillDeviceDatalist(current);
       }
       const probeSel = $('probe');
-      probeSel.innerHTML = '';
-      (s.probes || []).forEach(p => {
-        const opt = document.createElement('option');
-        opt.value = p.id; opt.textContent = p.label;
-        probeSel.appendChild(opt);
-      });
-      probeSel.value = s.target.probe;
-      $('iface').value = s.target.interface;
-      $('speed').value = String(s.target.speed || 4000);
+      if (probeSel) {
+        probeSel.innerHTML = '';
+        (s.probes || []).forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.id; opt.textContent = p.label;
+          probeSel.appendChild(opt);
+        });
+        if (target.probe) probeSel.value = target.probe;
+      }
+      if ($('iface') && target.interface) $('iface').value = target.interface;
+      if ($('speed')) $('speed').value = String(target.speed || 4000);
 
       // tools
       toolKeys.forEach(k => {
-        $('path-' + k).value = s.tools?.[k] || '';
-        const check = s.doctor?.tools?.find(t => t.key === k);
+        const pathEl = $('path-' + k);
+        if (pathEl) pathEl.value = (s.tools && s.tools[k]) || '';
+        const check = s.doctor && s.doctor.tools ? s.doctor.tools.find(t => t.key === k) : undefined;
         const m = $('mark-' + k);
-        m.className = markClass(check?.status);
-        m.textContent = markSymbol(check?.status);
-        m.title = check?.message || '';
+        if (m) {
+          m.className = markClass(check && check.status);
+          m.textContent = markSymbol(check && check.status);
+          m.title = (check && check.message) || '';
+        }
       });
 
       // settings page
       const st = s.settings || {};
-      $('optAutoSyscfg').checked = !!st.autoSyscfgOnBuild;
-      $('optBuildBeforeFlash').checked = st.buildBeforeFlash !== false;
-      $('optBuildBeforeDebug').checked = st.buildBeforeDebug !== false;
-      $('optAutoDetectStartup').checked = st.autoDetectOnStartup !== false;
-      $('optOpenOutputOnError').checked = !!st.openOutputOnError;
-      $('optBuildJobs').value = String(st.buildJobs || 8);
-      $('optSerialBaud').value = String(st.serialBaudRate || 115200);
-      $('optToolScope').value = st.toolPathScope === 'workspace' ? 'workspace' : 'user';
-      $('optDefaultDevice').value = st.defaultDevice || '';
-      $('optDefaultProbe').value = st.defaultProbe || 'jlink';
+      if ($('optAutoSyscfg')) $('optAutoSyscfg').checked = !!st.autoSyscfgOnBuild;
+      if ($('optBuildBeforeFlash')) $('optBuildBeforeFlash').checked = st.buildBeforeFlash !== false;
+      if ($('optBuildBeforeDebug')) $('optBuildBeforeDebug').checked = st.buildBeforeDebug !== false;
+      if ($('optAutoDetectStartup')) $('optAutoDetectStartup').checked = st.autoDetectOnStartup !== false;
+      if ($('optOpenOutputOnError')) $('optOpenOutputOnError').checked = !!st.openOutputOnError;
+      if ($('optAutoSwitchProject')) $('optAutoSwitchProject').checked = st.autoSwitchProject !== false;
+      if ($('optBuildJobs')) $('optBuildJobs').value = String(st.buildJobs || 8);
+      if ($('optSerialBaud')) $('optSerialBaud').value = String(st.serialBaudRate || 115200);
+      if ($('optToolScope')) $('optToolScope').value = st.toolPathScope === 'workspace' ? 'workspace' : 'user';
+      if ($('optDefaultDevice')) $('optDefaultDevice').value = st.defaultDevice || '';
+      if ($('optDefaultProbe')) $('optDefaultProbe').value = st.defaultProbe || 'jlink';
 
       // actions
       const a = s.actions || {};
@@ -511,11 +729,19 @@ return `<!DOCTYPE html>
       setDisabled('btnCreate', a.createProject);
       setDisabled('btnForceDetect', a.forceDetect);
       setDisabled('btnSerial', a.openSerial);
+      const hasWs = !!(s.workspaceFolder || (s.workspaceFolders && s.workspaceFolders.length));
+      setDisabled('btnPickFolder', hasWs && !busy);
+      setDisabled('btnRefreshProjects', hasWs && !busy);
       setDisabled('btnDetect', true);
       setDisabled('btnDoctor', true);
 
       setMsg(s.lastMessage || '', s.lastMessageLevel || 'info');
-      suppress = false;
+      } catch (err) {
+        console.error('[MSPM0 sidebar render]', err);
+        setMsg('侧边栏渲染失败: ' + (err && err.message ? err.message : String(err)), 'error');
+      } finally {
+        suppress = false;
+      }
     }
 
     function post(type, payload) {
@@ -533,13 +759,23 @@ return `<!DOCTYPE html>
       });
     }
 
+    function on(id, event, handler) {
+      const el = $(id);
+      if (el) el.addEventListener(event, handler);
+    }
+    function onClick(id, handler) {
+      const el = $(id);
+      if (el) el.onclick = handler;
+    }
+
+    try {
     // tabs
-    $('tabConsole').onclick = () => { applyPage('console'); post('setPage', { page: 'console' }); };
-    $('tabSettings').onclick = () => { applyPage('settings'); post('setPage', { page: 'settings' }); };
+    onClick('tabConsole', () => { applyPage('console'); post('setPage', { page: 'console' }); });
+    onClick('tabSettings', () => { applyPage('settings'); post('setPage', { page: 'settings' }); });
 
     // tools
     toolKeys.forEach(k => {
-      $('path-' + k).addEventListener('change', (e) => {
+      on('path-' + k, 'change', (e) => {
         if (suppress) return;
         post('setToolPath', { key: k, path: e.target.value });
       });
@@ -564,45 +800,51 @@ return `<!DOCTYPE html>
       deviceEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commitDevice(e.target.value, false); } });
       deviceEl.addEventListener('blur', (e) => { if (!suppress && resolveDevice(e.target.value)) commitDevice(e.target.value, true); });
     }
-    ['probe','iface','speed'].forEach(id => $(id).addEventListener('change', () => emitTarget(false)));
+    ['probe','iface','speed'].forEach(id => on(id, 'change', () => emitTarget(false)));
 
     // settings bindings
-    $('optAutoSyscfg').addEventListener('change', (e) => { if (!suppress) postSetting('autoSyscfgOnBuild', !!e.target.checked); });
-    $('optBuildBeforeFlash').addEventListener('change', (e) => { if (!suppress) postSetting('buildBeforeFlash', !!e.target.checked); });
-    $('optBuildBeforeDebug').addEventListener('change', (e) => { if (!suppress) postSetting('buildBeforeDebug', !!e.target.checked); });
-    $('optOpenOutputOnError').addEventListener('change', (e) => { if (!suppress) postSetting('openOutputOnError', !!e.target.checked); });
-    $('optAutoDetectStartup').addEventListener('change', (e) => { if (!suppress) postSetting('autoDetectOnStartup', !!e.target.checked); });
-    $('optBuildJobs').addEventListener('change', (e) => { if (!suppress) postSetting('buildJobs', Number(e.target.value || 8)); });
-    $('optSerialBaud').addEventListener('change', (e) => { if (!suppress) postSetting('serialBaudRate', Number(e.target.value || 115200)); });
-    $('optToolScope').addEventListener('change', (e) => { if (!suppress) postSetting('toolPathScope', e.target.value); });
-    $('optDefaultDevice').addEventListener('change', (e) => { if (!suppress) postSetting('defaultDevice', String(e.target.value || '').trim()); });
-    $('optDefaultProbe').addEventListener('change', (e) => { if (!suppress) postSetting('defaultProbe', e.target.value); });
+    on('optAutoSyscfg', 'change', (e) => { if (!suppress) postSetting('autoSyscfgOnBuild', !!e.target.checked); });
+    on('optBuildBeforeFlash', 'change', (e) => { if (!suppress) postSetting('buildBeforeFlash', !!e.target.checked); });
+    on('optBuildBeforeDebug', 'change', (e) => { if (!suppress) postSetting('buildBeforeDebug', !!e.target.checked); });
+    on('optOpenOutputOnError', 'change', (e) => { if (!suppress) postSetting('openOutputOnError', !!e.target.checked); });
+    on('optAutoSwitchProject', 'change', (e) => { if (!suppress) postSetting('autoSwitchProject', !!e.target.checked); });
+    on('optAutoDetectStartup', 'change', (e) => { if (!suppress) postSetting('autoDetectOnStartup', !!e.target.checked); });
+    on('optBuildJobs', 'change', (e) => { if (!suppress) postSetting('buildJobs', Number(e.target.value || 8)); });
+    on('optSerialBaud', 'change', (e) => { if (!suppress) postSetting('serialBaudRate', Number(e.target.value || 115200)); });
+    on('optToolScope', 'change', (e) => { if (!suppress) postSetting('toolPathScope', e.target.value); });
+    on('optDefaultDevice', 'change', (e) => { if (!suppress) postSetting('defaultDevice', String(e.target.value || '').trim()); });
+    on('optDefaultProbe', 'change', (e) => { if (!suppress) postSetting('defaultProbe', e.target.value); });
 
     // actions
-    $('btnDetect').onclick = () => post('autoDetect');
-    $('btnDoctor').onclick = () => post('doctor');
-    $('btnInit').onclick = () => post('initProject');
-    $('btnSync').onclick = () => post('syncConfig');
-    $('btnBuild').onclick = () => post('runAction', { action: 'build' });
-    $('btnClean').onclick = () => post('runAction', { action: 'clean' });
-    $('btnFlash').onclick = () => post('runAction', { action: 'flash' });
-    $('btnSysGui').onclick = () => post('runAction', { action: 'syscfgGui' });
-    $('btnSysGen').onclick = () => post('runAction', { action: 'syscfgGen' });
-    $('btnDebug').onclick = () => post('runAction', { action: 'debug' });
-    $('btnHealth').onclick = () => post('healthCheck');
-    $('btnCreate').onclick = () => post('createProject');
-    $('btnForceDetect').onclick = () => post('forceDetect');
-    $('btnSerial').onclick = () => post('openSerial');
-    $('workspaceFolder').addEventListener('change', (e) => post('setWorkspaceFolder', { path: e.target.value }));
+    onClick('btnDetect', () => post('autoDetect'));
+    onClick('btnDoctor', () => post('doctor'));
+    onClick('btnInit', () => post('initProject'));
+    onClick('btnSync', () => post('syncConfig'));
+    onClick('btnBuild', () => post('runAction', { action: 'build' }));
+    onClick('btnClean', () => post('runAction', { action: 'clean' }));
+    onClick('btnFlash', () => post('runAction', { action: 'flash' }));
+    onClick('btnSysGui', () => post('runAction', { action: 'syscfgGui' }));
+    onClick('btnSysGen', () => post('runAction', { action: 'syscfgGen' }));
+    onClick('btnDebug', () => post('runAction', { action: 'debug' }));
+    onClick('btnHealth', () => post('healthCheck'));
+    onClick('btnCreate', () => post('createProject'));
+    onClick('btnPickFolder', () => post('pickProjectFolder'));
+    onClick('btnRefreshProjects', () => post('refreshProjects'));
+    onClick('btnForceDetect', () => post('forceDetect'));
+    onClick('btnSerial', () => post('openSerial'));
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
-      if (msg?.type === 'state') render(msg.payload);
-      if (msg?.type === 'actionProgress' && msg.payload?.message) {
+      if (msg && msg.type === 'state') render(msg.payload);
+      if (msg && msg.type === 'actionProgress' && msg.payload && msg.payload.message) {
         setMsg(msg.payload.message, msg.payload.status === 'error' ? 'error' : (msg.payload.status === 'ok' ? 'success' : 'info'));
       }
     });
     post('ready');
+    } catch (err) {
+      console.error('[MSPM0 sidebar init]', err);
+      try { setMsg('侧边栏初始化失败: ' + (err && err.message ? err.message : String(err)), 'error'); } catch (_) {}
+    }
   </script>
 </body>
 </html>`;

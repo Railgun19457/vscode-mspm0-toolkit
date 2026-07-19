@@ -24,6 +24,8 @@ export type WebviewToHost =
 	| { type: 'setTargetConfig'; payload: Partial<TargetConfig> }
 	| { type: 'setPluginSetting'; payload: { key: keyof PluginSettings; value: string | number | boolean } }
 	| { type: 'setWorkspaceFolder'; payload: { path: string } }
+	| { type: 'pickProjectFolder' }
+	| { type: 'refreshProjects' }
 	| { type: 'initProject' }
 	| { type: 'createProject' }
 	| { type: 'forceDetect' }

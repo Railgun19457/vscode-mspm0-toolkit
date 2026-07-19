@@ -1,14 +1,24 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { ProbeType } from '../model/types';
 
 export class DebugService {
-	async start(configName?: string, probe?: ProbeType, workspaceFolder?: string): Promise<void> {
+	/**
+	 * Start a debug session for the active project.
+	 * projectRoot may be a nested folder; launch.json is read from that project.
+	 * The VS Code WorkspaceFolder used as the debug "folder" is the containing workspace root.
+	 */
+	async start(configName?: string, probe?: ProbeType, projectRoot?: string): Promise<void> {
 		const folders = vscode.workspace.workspaceFolders ?? [];
 		if (!folders.length) {
 			throw new Error('请先打开工作区文件夹');
 		}
+
+		const projectAbs = projectRoot ? path.normalize(path.resolve(projectRoot)) : undefined;
 		const folder =
-			(workspaceFolder && folders.find((f) => f.uri.fsPath === workspaceFolder)) ||
+			(projectAbs && this.findContainingFolder(projectAbs, folders)) ||
+			(projectAbs && folders.find((f) => path.normalize(f.uri.fsPath) === projectAbs)) ||
 			folders[0];
 
 		const cortex = vscode.extensions.getExtension('marus25.cortex-debug');
@@ -20,6 +30,23 @@ export class DebugService {
 		}
 
 		const preferred = configName || this.defaultConfigName(probe);
+
+		// Prefer launch.json inside the project root (supports nested multi-project layouts).
+		const projectConfigs = projectAbs ? this.readProjectLaunchConfigs(projectAbs) : [];
+		const fromProject =
+			this.pickConfig(projectConfigs, probe) ||
+			projectConfigs.find((c) => c.name === preferred) ||
+			projectConfigs.find((c) => c.type === 'cortex-debug');
+
+		if (fromProject) {
+			const started = await vscode.debug.startDebugging(folder, fromProject as vscode.DebugConfiguration);
+			if (!started) {
+				throw new Error('启动调试失败');
+			}
+			return;
+		}
+
+		// Fallback: workspace-level launch configurations (root project).
 		let started = await vscode.debug.startDebugging(folder, preferred);
 		if (!started) {
 			const launches = vscode.workspace.getConfiguration('launch', folder);
@@ -36,6 +63,48 @@ export class DebugService {
 			if (!started) {
 				throw new Error('启动调试失败');
 			}
+		}
+	}
+
+	private findContainingFolder(
+		projectAbs: string,
+		folders: readonly vscode.WorkspaceFolder[]
+	): vscode.WorkspaceFolder | undefined {
+		let best: vscode.WorkspaceFolder | undefined;
+		let bestLen = -1;
+		for (const f of folders) {
+			const folderAbs = path.normalize(f.uri.fsPath);
+			if (
+				projectAbs === folderAbs ||
+				projectAbs.startsWith(folderAbs + path.sep) ||
+				projectAbs.startsWith(folderAbs + '/')
+			) {
+				if (folderAbs.length > bestLen) {
+					best = f;
+					bestLen = folderAbs.length;
+				}
+			}
+		}
+		return best;
+	}
+
+	private readProjectLaunchConfigs(
+		projectRoot: string
+	): Array<{ name: string; type?: string; servertype?: string } & Record<string, unknown>> {
+		const file = path.join(projectRoot, '.vscode', 'launch.json');
+		try {
+			if (!fs.existsSync(file)) {
+				return [];
+			}
+			const raw = fs.readFileSync(file, 'utf8');
+			// Strip simple // comments that VS Code launch.json may contain.
+			const json = raw.replace(/^\s*\/\/.*$/gm, '');
+			const parsed = JSON.parse(json) as { configurations?: Array<Record<string, unknown>> };
+			return Array.isArray(parsed.configurations)
+				? (parsed.configurations as Array<{ name: string; type?: string; servertype?: string } & Record<string, unknown>>)
+				: [];
+		} catch {
+			return [];
 		}
 	}
 
