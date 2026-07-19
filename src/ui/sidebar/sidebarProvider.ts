@@ -33,6 +33,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private busyAction?: string;
 	private lastMessage?: string;
 	private lastMessageLevel?: 'info' | 'success' | 'error';
+	private messageClearTimer?: ReturnType<typeof setTimeout>;
 	private doctorCache?: SidebarState['doctor'];
 	private healthCache?: SidebarState['health'];
 	private page: SidebarPage = 'console';
@@ -172,6 +173,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 	private setMessage(message: string, level: 'info' | 'success' | 'error' = 'info'): void {
 		this.lastMessage = message;
 		this.lastMessageLevel = level;
+		if (this.messageClearTimer) {
+			clearTimeout(this.messageClearTimer);
+		}
+		this.messageClearTimer = setTimeout(() => {
+			this.messageClearTimer = undefined;
+			this.lastMessage = undefined;
+			this.lastMessageLevel = undefined;
+			void this.pushState();
+		}, 4000);
 	}
 
 	private async onMessage(msg: WebviewToHost): Promise<void> {
