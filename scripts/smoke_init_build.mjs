@@ -89,18 +89,27 @@ function main() {
     '',
   ].join('\n'));
 
-  writeText(path.join(tmp, 'Makefile'), `# smoke makefile
+  writeText(path.join(tmp, 'Makefile'), `# smoke makefile (mirrors plugin nested-src discovery)
 TARGET   ?= app
 BUILD    := build
 include toolpaths.mk
+EXTRA_SRCS :=
+EXTRA_INCLUDES :=
+-include app.mk
 CC            := $(GCC_PATH)/bin/arm-none-eabi-gcc
 OBJCOPY       := $(GCC_PATH)/bin/arm-none-eabi-objcopy
 SIZE          := $(GCC_PATH)/bin/arm-none-eabi-size
+rwildcard = $(wildcard $1$2) $(foreach d,$(wildcard $1*),$(call rwildcard,$d/,$2))
+APP_SRCS := $(call rwildcard,src/,*.c)
+SRC_HDRS := $(call rwildcard,src/,*.h)
+SRC_INCDIRS := $(sort $(dir $(SRC_HDRS)))
 CPUFLAGS := -mcpu=cortex-m0plus -march=armv6-m -mthumb -mfloat-abi=soft
 CFLAGS   := $(CPUFLAGS) -std=c99 -O2 -g -gstrict-dwarf -Wall \\
             -ffunction-sections -fdata-sections \\
             @linker/device.opt \\
             -I. -Isrc -Isyscfg \\
+            $(addprefix -I,$(SRC_INCDIRS)) \\
+            $(EXTRA_INCLUDES) \\
             -I$(SDK)/source \\
             -I$(SDK)/source/third_party/CMSIS/Core/Include \\
             -I$(GCC_PATH)/arm-none-eabi/include
@@ -111,7 +120,7 @@ LDFLAGS  := $(CPUFLAGS) -nostartfiles -static -Wl,--gc-sections \\
             -Tlinker/device.lds \\
             --specs=nano.specs --specs=nosys.specs \\
             -lgcc -lc -lm
-SRCS := src/main.c src/startup_mspm0g350x_gcc.c syscfg/ti_msp_dl_config.c
+SRCS := $(sort $(APP_SRCS) syscfg/ti_msp_dl_config.c $(EXTRA_SRCS))
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(SRCS))
 .PHONY: all clean size
 all: $(BUILD)/$(TARGET).out $(BUILD)/$(TARGET).hex size

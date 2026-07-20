@@ -10,8 +10,7 @@ MSPM0 Toolkit 是一个面向 TI MSPM0 系列 MCU 开发的 VS Code 扩展
 - 一键初始化工程（`mspm0.project.json` 标准工程约定）
 - 支持多种仿真器：J-Link / OpenOCD / TI XDS110 / CMSIS-DAP
 - 一键启动构建 / 清理 / 烧录 / SysConfig GUI / 生成配置 / 调试 / 串口
-- **多工程工作区**：同一工作区内可有多个 MSPM0 工程根（含子文件夹），侧边栏列表切换
-- **按编辑器自动切换工程**（`mspm0.autoSwitchProject`，默认开启）
+- **多工程工作区**：同一工作区内可有多个 MSPM0 工程根（含子文件夹）
 
 ## 运行环境
 
@@ -71,7 +70,7 @@ repo/                          ← VS Code 工作区根
 | **刷新列表** | 重新扫描工作区内的 `mspm0.project.json` |
 | 点击卡片 | 切换活动工程；构建 / 烧录 / 调试均针对当前工程 |
 | 自动切换 | 打开/切换源文件时，匹配包含该文件的最近工程根（可关，见配置项） |
-| **新建工程** | 默认在所选目录内创建（该目录即为工程根，不再强制再套一层子文件夹） |
+
 
 嵌套工程同步配置时：
 
@@ -156,13 +155,20 @@ repo/                          ← VS Code 工作区根
 初始化后的标准工程（可位于工作区根，或任意子文件夹）：
 
 ```text
-MyProject/                 # 或 repo/apps/blink/
+MyProject/                 
 ├── mspm0.project.json
-├── Makefile
+├── Makefile              # 插件生成：递归编译 src/**/*.c
 ├── toolpaths.mk
+├── app.mk                # 可选，用户维护：EXTRA_SRCS / EXTRA_INCLUDES
 ├── src/
 │   ├── main.c
-│   └── startup_*.c
+│   ├── startup_*.c
+│   ├── Hardware/         # 支持任意嵌套
+│   │   ├── Inc/*.h
+│   │   └── Src/*.c
+│   └── Function/
+│       ├── Inc/*.h
+│       └── Src/*.c
 ├── syscfg/
 │   ├── app.syscfg
 │   ├── ti_msp_dl_config.c
@@ -183,6 +189,20 @@ MyProject/                 # 或 repo/apps/blink/
 ```
 
 多工程时，每个含 `mspm0.project.json` 的目录各自拥有上述结构；活动工程由侧边栏列表或自动切换决定。
+
+**复杂源码树**：插件生成的 Makefile 会：
+
+1. 用 `rwildcard` 递归收集 `src/**/*.c`（含 `startup_*.c`）
+2. 自动把 `src` 下含 `.h` 的目录加入编译 include 路径
+3. `-include app.mk`，便于追加 SDK 外第三方源或额外 `-I`（该文件不会被「同步配置」覆盖）
+
+`app.mk` 示例：
+
+```make
+# 追加仓库外/第三方源（路径相对工程根）
+EXTRA_SRCS += third_party/foo/bar.c
+EXTRA_INCLUDES += -Ithird_party/foo
+```
 
 `mspm0.project.json` 示例：
 

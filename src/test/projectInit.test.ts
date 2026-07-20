@@ -65,9 +65,43 @@ suite('ProjectService.initProject', () => {
 		);
 		const mk = fs.readFileSync(path.join(tmp, 'Makefile'), 'utf8');
 		assert.ok(mk.includes('-include toolpaths.mk'));
+		// Nested src/** support: recursive discovery + optional app.mk overlay
+		assert.ok(mk.includes('rwildcard'), 'Makefile should define recursive wildcard helper');
+		assert.ok(mk.includes('$(call rwildcard,src/,*.c)'), 'Makefile should auto-discover nested .c under src/');
+		assert.ok(mk.includes('$(call rwildcard,src/,*.h)'), 'Makefile should auto-discover nested header dirs');
+		assert.ok(mk.includes('-include app.mk'), 'Makefile should allow optional app.mk extras');
+		assert.ok(mk.includes('EXTRA_INCLUDES'), 'Makefile should wire EXTRA_INCLUDES into CFLAGS');
+		assert.ok(!mk.includes('SRCS := src/main.c'), 'Makefile should not hardcode only flat src/main.c');
 		const proj = JSON.parse(fs.readFileSync(path.join(tmp, 'mspm0.project.json'), 'utf8'));
 		assert.strictEqual(proj.device, 'MSPM0G3507');
 		assert.strictEqual(proj.version, 1);
+	});
+
+	test('makefile discovers nested src folders via rwildcard', async () => {
+		await service.initProject({ ...DEFAULT_TARGET }, tools, tmp);
+		// Simulate a multi-level business tree (diansai-style)
+		const nestedC = path.join(tmp, 'src', 'Hardware', 'Src', 'motor.c');
+		const nestedH = path.join(tmp, 'src', 'Hardware', 'Inc', 'motor.h');
+		fs.mkdirSync(path.dirname(nestedC), { recursive: true });
+		fs.mkdirSync(path.dirname(nestedH), { recursive: true });
+		fs.writeFileSync(nestedC, 'void motor_init(void) {}\n', 'utf8');
+		fs.writeFileSync(nestedH, 'void motor_init(void);\n', 'utf8');
+		// Optional extras via app.mk (never overwritten by extension)
+		fs.writeFileSync(
+			path.join(tmp, 'app.mk'),
+			'EXTRA_SRCS += third_party/foo.c\nEXTRA_INCLUDES += -Ithird_party\n',
+			'utf8'
+		);
+		await service.syncConfig(tools, tmp);
+		const mk = fs.readFileSync(path.join(tmp, 'Makefile'), 'utf8');
+		assert.ok(mk.includes('APP_SRCS := $(call rwildcard,src/,*.c)'));
+		assert.ok(mk.includes('SRC_INCDIRS := $(sort $(dir $(SRC_HDRS)))'));
+		assert.ok(mk.includes('$(addprefix -I,$(SRC_INCDIRS))'));
+		assert.ok(mk.includes('$(EXTRA_SRCS)'));
+		// app.mk itself is not rewritten by sync
+		assert.ok(fs.existsSync(path.join(tmp, 'app.mk')));
+		const appMk = fs.readFileSync(path.join(tmp, 'app.mk'), 'utf8');
+		assert.ok(appMk.includes('EXTRA_SRCS'));
 	});
 
 	test('does not overwrite existing main.c', async () => {

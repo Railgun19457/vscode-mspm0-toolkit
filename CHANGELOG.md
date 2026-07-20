@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.10
+
+- 构建：Makefile 递归发现 `src/**/*.c`，支持嵌套业务目录（如 `src/Hardware/Src`）
+- 构建：自动将 `src` 下含头文件的子目录加入 `-I`（如 `src/Hardware/Inc`）
+- 构建：支持可选 `app.mk` 扩展 `EXTRA_SRCS` / `EXTRA_INCLUDES`（同步配置不会覆盖）
+
 ## 0.6.9
 
 - 重构：构建 / 烧录 / 调试 / SysConfig 流水线统一到 `WorkflowService`（命令面板与侧边栏共用）
