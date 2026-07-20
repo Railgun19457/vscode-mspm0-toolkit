@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { DEFAULT_TARGET } from './model/types';
 import { BuildService } from './services/buildService';
 import { ConfigGenerator } from './services/configGenerator';
+import { Mspm0CppConfigurationProvider } from './services/cppConfigurationProvider';
 import { DebugService } from './services/debugService';
 import { DeviceRegistry } from './services/deviceRegistry';
 import { ProjectService } from './services/projectService';
@@ -27,7 +28,8 @@ export function activate(context: vscode.ExtensionContext): void {
 	const workflow = new WorkflowService(projects, toolPaths, build, debug);
 	const statusBar = new StatusBarController();
 	const serial = new SerialService(context);
-	context.subscriptions.push(statusBar);
+	const cppProvider = new Mspm0CppConfigurationProvider(projects, devices, toolPaths, configGenerator);
+	context.subscriptions.push(statusBar, cppProvider);
 
 	const sidebar = new SidebarProvider(
 		context,
@@ -37,7 +39,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		devices,
 		workflow,
 		statusBar,
-		serial
+		serial,
+		() => cppProvider.notifyChanged()
 	);
 
 	context.subscriptions.push(
@@ -94,6 +97,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		statusBar.setAction('探测工具中…', 'running');
 		const detected = await toolPaths.autoDetect();
 		await toolPaths.applyDetected(detected, false);
+		cppProvider.notifyChanged();
 		await sidebar.refreshDoctorAndPush();
 		statusBar.setAction('工具探测完成', 'success');
 		vscode.window.showInformationMessage('MSPM0: 自动探测完成');
@@ -108,6 +112,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			device: settings.defaultDevice,
 		};
 		await projects.initProject(target, toolPaths.getPaths());
+		cppProvider.notifyChanged();
 		await sidebar.refreshDoctorAndPush();
 		statusBar.setAction('工程已初始化', 'success');
 		vscode.window.showInformationMessage('MSPM0: 工程已初始化');
@@ -116,6 +121,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	register('mspm0.syncConfig', async () => {
 		statusBar.setAction('同步配置…', 'running');
 		await projects.syncConfig(toolPaths.getPaths());
+		cppProvider.notifyChanged();
 		await sidebar.refreshDoctorAndPush();
 		statusBar.setAction('配置已同步', 'success');
 		vscode.window.showInformationMessage('MSPM0: 配置已同步');
@@ -192,6 +198,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		statusBar.setAction('强制探测工具…', 'running');
 		const detected = await toolPaths.autoDetect();
 		await toolPaths.applyDetected(detected, true);
+		cppProvider.notifyChanged();
 		await sidebar.refreshDoctorAndPush();
 		statusBar.setAction('强制探测完成', 'success');
 		vscode.window.showInformationMessage('MSPM0: 强制探测并覆盖路径完成');
@@ -200,10 +207,19 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration(async (e) => {
 			if (e.affectsConfiguration('mspm0')) {
+				// Tool paths / device defaults affect include paths and defines.
+				if (
+					e.affectsConfiguration('mspm0.gccPath') ||
+					e.affectsConfiguration('mspm0.sdkPath') ||
+					e.affectsConfiguration('mspm0.defaultDevice')
+				) {
+					cppProvider.notifyChanged();
+				}
 				await sidebar.refreshDoctorAndPush();
 			}
 		}),
 		vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+			cppProvider.notifyChanged();
 			await sidebar.refreshDoctorAndPush();
 		})
 	);
@@ -218,6 +234,8 @@ export function activate(context: vscode.ExtensionContext): void {
 				await toolPaths.applyDetected(detected, false);
 			}
 		}
+		// Register after startup tool detection so first configs include absolute SDK/GCC paths.
+		await cppProvider.register();
 		await sidebar.refreshDoctorAndPush();
 		await sidebar.maybeAutoSwitchProject();
 	})();

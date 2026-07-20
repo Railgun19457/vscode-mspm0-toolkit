@@ -4,8 +4,33 @@ import { DeviceInfo, Mspm0ProjectFile, ProbeType, ToolPaths } from '../model/typ
 import { ensureDir, writeJsonFile, writeTextFile } from '../util/fsUtil';
 import { toForward } from '../util/pathUtil';
 
+/** Shape written into project-local c_cpp_properties.json configurations[]. */
+interface CppPropertiesConfiguration {
+	name: string;
+	includePath: string[];
+	defines: string[];
+	compilerPath: string;
+	cStandard: string;
+	intelliSenseMode: string;
+	browse?: { path: string[]; limitSymbolsToIncludedHeaders?: boolean };
+}
+
 /**
- * Generate portable VS Code configs.
+ * Absolute-path IntelliSense config for ms-vscode.cpptools Custom Configuration Provider.
+ * Prefer absolute paths: Provider responses do not expand ${config:…} / ${workspaceFolder}.
+ * includePath must list concrete directories (/** is unreliable for Custom Configuration Provider).
+ */
+export interface SourceFileCppConfiguration {
+	includePath: string[];
+	defines: string[];
+	compilerPath: string;
+	cStandard: 'c99';
+	/** Platform-qualified mode required by Custom Configuration Provider. */
+	intelliSenseMode: 'windows-gcc-arm' | 'linux-gcc-arm' | 'macos-gcc-arm';
+}
+
+/**
+ * Generate portable VS Code configs under the project root.
  * Machine paths come from ${config:mspm0.*} / env, not hard-coded drive letters.
  * toolpaths.mk is an optional local cache for plain terminal `make`.
  *
@@ -13,9 +38,8 @@ import { toForward } from '../util/pathUtil';
  * folder ('.' when they are the same). Nested projects use e.g. 'apps/blink' so that
  * ${workspaceFolder}/apps/blink/... resolves correctly for debug/tasks.
  *
- * workspaceFolderRoot: absolute path of the containing VS Code workspace folder.
- * When the project is nested, IntelliSense configs are also written there because
- * ms-vscode.cpptools only loads `.vscode/c_cpp_properties.json` from the workspace root.
+ * Nested monorepo IntelliSense is handled by Custom Configuration Provider
+ * (cppConfigurationProvider.ts), not by writing workspace-root `.vscode` files.
  */
 export class ConfigGenerator {
 	async generate(
@@ -24,19 +48,12 @@ export class ConfigGenerator {
 		tools: ToolPaths,
 		device: DeviceInfo,
 		extensionPath?: string,
-		projectRelFromWorkspace: string = '.',
-		workspaceFolderRoot?: string
+		projectRelFromWorkspace: string = '.'
 	): Promise<void> {
 		const vscodeDir = path.join(projectRoot, '.vscode');
 		ensureDir(vscodeDir);
 
 		const projectUri = this.workspaceProjectUri(projectRelFromWorkspace);
-		const isNested = !!projectRelFromWorkspace && projectRelFromWorkspace !== '.';
-		const wsRoot = workspaceFolderRoot
-			? path.normalize(path.resolve(workspaceFolderRoot))
-			: isNested
-				? this.inferWorkspaceRoot(projectRoot, projectRelFromWorkspace)
-				: path.normalize(path.resolve(projectRoot));
 
 		// Optional local cache for terminal make outside the extension.
 		// Prefer env vars injected by the extension / tasks.
@@ -112,7 +129,8 @@ export class ConfigGenerator {
 			})
 		);
 
-		// Project-local IntelliSense (used when this folder is opened as the workspace root).
+		// Project-local IntelliSense only (useful when this folder is opened alone as the
+		// workspace root). Nested monorepos rely on the Custom Configuration Provider.
 		this.writeJsonMerged(
 			path.join(vscodeDir, 'c_cpp_properties.json'),
 			{
@@ -121,66 +139,6 @@ export class ConfigGenerator {
 			},
 			(existing, gen) => this.mergeCppProperties(existing, gen)
 		);
-
-		// Nested projects: C/C++ extension only reads workspace-root .vscode/c_cpp_properties.json.
-		// Also mirror settings defaults so includePath works even without switching configuration.
-		if (isNested && wsRoot && path.normalize(wsRoot) !== path.normalize(projectRoot)) {
-			const wsVscode = path.join(wsRoot, '.vscode');
-			ensureDir(wsVscode);
-			this.writeJsonMerged(
-				path.join(wsVscode, 'c_cpp_properties.json'),
-				{
-					configurations: [cppConfig],
-					version: 4,
-				},
-				(existing, gen) => this.mergeCppProperties(existing, gen)
-			);
-			this.writeJsonMerged(
-				path.join(wsVscode, 'settings.json'),
-				{
-					'files.associations': { '*.h': 'c', '*.c': 'c' },
-					'C_Cpp.default.includePath': cppConfig.includePath,
-					'C_Cpp.default.defines': cppConfig.defines,
-					'C_Cpp.default.compilerPath': cppConfig.compilerPath,
-					'C_Cpp.default.cStandard': 'c99',
-					'C_Cpp.default.intelliSenseMode': 'gcc-arm',
-					'C_Cpp.default.browse.path': cppConfig.browse?.path ?? cppConfig.includePath,
-				},
-				(existing, gen) => {
-					const prevIncludes = Array.isArray(existing['C_Cpp.default.includePath'])
-						? (existing['C_Cpp.default.includePath'] as string[])
-						: [];
-					const nextIncludes = Array.isArray(gen['C_Cpp.default.includePath'])
-						? (gen['C_Cpp.default.includePath'] as string[])
-						: [];
-					const mergedIncludes = Array.from(new Set([...prevIncludes, ...nextIncludes]));
-					const prevBrowse = Array.isArray(existing['C_Cpp.default.browse.path'])
-						? (existing['C_Cpp.default.browse.path'] as string[])
-						: [];
-					const nextBrowse = Array.isArray(gen['C_Cpp.default.browse.path'])
-						? (gen['C_Cpp.default.browse.path'] as string[])
-						: [];
-					const prevDefs = Array.isArray(existing['C_Cpp.default.defines'])
-						? (existing['C_Cpp.default.defines'] as string[])
-						: [];
-					const nextDefs = Array.isArray(gen['C_Cpp.default.defines'])
-						? (gen['C_Cpp.default.defines'] as string[])
-						: [];
-					return {
-						...existing,
-						...gen,
-						'files.associations': {
-							...(existing['files.associations'] as object || {}),
-							...(gen['files.associations'] as object || {}),
-						},
-						// Union paths from all nested projects so multi-project IntelliSense works.
-						'C_Cpp.default.includePath': mergedIncludes,
-						'C_Cpp.default.browse.path': Array.from(new Set([...prevBrowse, ...nextBrowse, ...mergedIncludes])),
-						'C_Cpp.default.defines': Array.from(new Set([...prevDefs, ...nextDefs])),
-					};
-				}
-			);
-		}
 
 		const launchConfigs = this.buildLaunchConfigs(project, device, svd, projectRelFromWorkspace);
 
@@ -327,22 +285,9 @@ export class ConfigGenerator {
 		return `\${workspaceFolder}/${rel}`;
 	}
 
-	/** Infer workspace folder absolute path from projectRoot + relative path. */
-	private inferWorkspaceRoot(projectRoot: string, projectRelFromWorkspace: string): string {
-		const rel = (projectRelFromWorkspace || '.').replace(/\\/g, '/').replace(/^\.\/+/, '');
-		if (!rel || rel === '.') {
-			return path.normalize(path.resolve(projectRoot));
-		}
-		const parts = rel.split('/').filter(Boolean);
-		let cur = path.normalize(path.resolve(projectRoot));
-		for (let i = 0; i < parts.length; i++) {
-			cur = path.dirname(cur);
-		}
-		return cur;
-	}
-
 	/**
-	 * Build one C/C++ configuration for IntelliSense.
+	 * Build one C/C++ configuration for project-local c_cpp_properties.json
+	 * (fallback when the folder is opened alone as the workspace root).
 	 * ms-vscode.cpptools does NOT expand ${config:mspm0.*}, so also embed absolute
 	 * SDK/GCC paths when known. Nested projects use ${workspaceFolder}/rel for local dirs.
 	 */
@@ -352,20 +297,11 @@ export class ConfigGenerator {
 		tools: ToolPaths,
 		projectUri: string,
 		projectRelFromWorkspace: string
-	): {
-		name: string;
-		includePath: string[];
-		defines: string[];
-		compilerPath: string;
-		cStandard: string;
-		intelliSenseMode: string;
-		browse?: { path: string[]; limitSymbolsToIncludedHeaders?: boolean };
-	} {
+	): CppPropertiesConfiguration {
 		const sdk = toForward(tools.sdk || '');
 		const gcc = toForward(tools.gcc || '');
 		const isNested = !!projectRelFromWorkspace && projectRelFromWorkspace !== '.';
-		// For nested projects prefer workspace-relative project paths so the same
-		// config works when loaded from the workspace-root c_cpp_properties.json.
+		// Workspace-relative roots so paths stay valid under a monorepo workspace folder.
 		const localRoot = isNested ? projectUri : '${workspaceFolder}';
 
 		const includePath = [
@@ -392,7 +328,7 @@ export class ConfigGenerator {
 		const uniqueIncludes = Array.from(new Set(includePath.filter(Boolean)));
 
 		const compilerPath = gcc
-			? `${gcc}/bin/arm-none-eabi-gcc.exe`
+			? this.gccCompilerPath(gcc)
 			: '${config:mspm0.gccPath}/bin/arm-none-eabi-gcc.exe';
 
 		const name = isNested
@@ -411,6 +347,121 @@ export class ConfigGenerator {
 				limitSymbolsToIncludedHeaders: true,
 			},
 		};
+	}
+
+	/**
+	 * Absolute-path configuration for the Custom Configuration Provider.
+	 * Each project gets its own include roots so monorepo syscfg headers do not collide.
+	 *
+	 * Important: do not rely on `/**` here. cpptools Custom Configuration Provider treats
+	 * includePath more like compiler -I flags; nested `#include "board.h"` needs
+	 * `…/src/board` listed explicitly (same idea as Makefile SRC_INCDIRS).
+	 */
+	buildSourceFileConfiguration(
+		projectRoot: string,
+		project: Mspm0ProjectFile,
+		device: DeviceInfo,
+		tools: ToolPaths
+	): SourceFileCppConfiguration {
+		const root = toForward(path.resolve(projectRoot));
+		const sdk = toForward(tools.sdk || '');
+		const gcc = toForward(tools.gcc || '');
+
+		const includePath: string[] = [
+			root,
+			`${root}/src`,
+			`${root}/syscfg`,
+			...this.collectHeaderIncludeDirs(path.join(path.resolve(projectRoot), 'src')),
+		];
+
+		if (sdk) {
+			includePath.push(`${sdk}/source`);
+			includePath.push(`${sdk}/source/third_party/CMSIS/Core/Include`);
+		}
+		if (gcc) {
+			includePath.push(`${gcc}/arm-none-eabi/include`);
+		}
+
+		// Drop non-existing optional dirs (e.g. empty syscfg) so cpptools does not
+		// mark the whole provider configuration as failed.
+		const existing = includePath.filter((p) => {
+			if (!p) {
+				return false;
+			}
+			// Always keep project root / src even if scan races.
+			const n = p.replace(/\\/g, '/');
+			if (n === root || n === `${root}/src`) {
+				return true;
+			}
+			try {
+				return fs.existsSync(p);
+			} catch {
+				return false;
+			}
+		});
+
+		return {
+			includePath: Array.from(new Set(existing)),
+			defines: [device.deviceDefine, device.familyDefine].filter(Boolean),
+			compilerPath: gcc
+				? this.gccCompilerPath(gcc)
+				: // Last-resort placeholder; provider should pass a real tools.gcc when possible.
+					'arm-none-eabi-gcc',
+			cStandard: 'c99',
+			intelliSenseMode: this.providerIntelliSenseMode(),
+		};
+	}
+
+	/**
+	 * Directories under `srcRoot` that contain `.h` files (and the dirs themselves).
+	 * Mirrors Makefile: SRC_INCDIRS := $(sort $(dir $(SRC_HDRS))).
+	 */
+	collectHeaderIncludeDirs(srcRoot: string): string[] {
+		const absRoot = path.resolve(srcRoot);
+		if (!fs.existsSync(absRoot)) {
+			return [];
+		}
+		const dirs = new Set<string>();
+		const walk = (dir: string) => {
+			let entries: fs.Dirent[];
+			try {
+				entries = fs.readdirSync(dir, { withFileTypes: true });
+			} catch {
+				return;
+			}
+			for (const ent of entries) {
+				if (ent.name === '.' || ent.name === '..') {
+					continue;
+				}
+				const full = path.join(dir, ent.name);
+				if (ent.isDirectory()) {
+					// Skip bulky/non-source trees if present under src.
+					if (ent.name === '.git' || ent.name === 'build' || ent.name === '.cache') {
+						continue;
+					}
+					walk(full);
+				} else if (ent.isFile() && /\.h$/i.test(ent.name)) {
+					dirs.add(toForward(path.resolve(dir)));
+				}
+			}
+		};
+		walk(absRoot);
+		return Array.from(dirs).sort();
+	}
+
+	private providerIntelliSenseMode(): SourceFileCppConfiguration['intelliSenseMode'] {
+		if (process.platform === 'win32') {
+			return 'windows-gcc-arm';
+		}
+		if (process.platform === 'darwin') {
+			return 'macos-gcc-arm';
+		}
+		return 'linux-gcc-arm';
+	}
+
+	private gccCompilerPath(gccRoot: string): string {
+		const base = `${gccRoot}/bin/arm-none-eabi-gcc`;
+		return process.platform === 'win32' ? `${base}.exe` : base;
 	}
 
 	/**

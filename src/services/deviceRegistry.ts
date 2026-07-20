@@ -32,12 +32,4 @@ export class DeviceRegistry {
 	get(id: string): DeviceInfo | undefined {
 		return this.devices.find((d) => d.id === id);
 	}
-
-	defaultId(): string {
-		return this.devices.find((d) => d.id === 'MSPM0G3507')?.id ?? this.devices[0]?.id ?? 'MSPM0G3507';
-	}
-
-	seriesList(): string[] {
-		return Array.from(new Set(this.devices.map((d) => d.series))).sort();
-	}
 }

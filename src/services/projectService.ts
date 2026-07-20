@@ -553,16 +553,7 @@ export class ProjectService {
 		writeTextFile(path.join(base, 'Makefile'), this.defaultMakefile(project, device));
 
 		const rel = this.getProjectRelFromWorkspace(base);
-		const wsFolder = this.getContainingWorkspaceFolder(base);
-		await this.configGenerator.generate(
-			base,
-			project,
-			tools,
-			device,
-			this.extensionPath,
-			rel,
-			wsFolder?.uri.fsPath
-		);
+		await this.configGenerator.generate(base, project, tools, device, this.extensionPath, rel);
 	}
 
 	async syncConfig(tools: ToolPaths, root?: string): Promise<void> {
@@ -583,16 +574,7 @@ export class ProjectService {
 		this.applyDeviceFiles(base, device, tools.sdk);
 		writeTextFile(path.join(base, 'Makefile'), this.defaultMakefile(project, device));
 		const rel = this.getProjectRelFromWorkspace(base);
-		const wsFolder = this.getContainingWorkspaceFolder(base);
-		await this.configGenerator.generate(
-			base,
-			project,
-			tools,
-			device,
-			this.extensionPath,
-			rel,
-			wsFolder?.uri.fsPath
-		);
+		await this.configGenerator.generate(base, project, tools, device, this.extensionPath, rel);
 	}
 
 	private applyDeviceFiles(base: string, device: DeviceInfo, sdkPath: string): void {

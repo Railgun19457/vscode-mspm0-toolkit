@@ -74,8 +74,9 @@ repo/                          ← VS Code 工作区根
 
 嵌套工程同步配置时：
 
-- `launch.json` / `tasks.json` 等使用 `${workspaceFolder}/相对路径`，调试与任务 cwd 指向子工程
-- 工作区根会合并写入 `c_cpp_properties` / 相关设置，便于 C/C++ 扩展加载 IntelliSense
+- `launch.json` / `tasks.json` 等写在**子工程** `.vscode`，路径使用 `${workspaceFolder}/相对路径`
+- IntelliSense 由扩展向 C/C++ 提供 **按文件所属工程** 的配置（Custom Configuration Provider），多工程同名 `ti_msp_dl_config.h` 可正确解析
+- **不再**向工作区根写入 `c_cpp_properties.json` / `settings.json`；工程本地仍生成 `c_cpp_properties.json`（将该文件夹单独打开时有用）
 
 ## 界面说明
 

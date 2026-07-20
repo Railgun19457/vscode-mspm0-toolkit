@@ -103,7 +103,7 @@ suite('ProjectService multi-root and health', () => {
 			const build = tasks.tasks.find((t: any) => t.label === 'build');
 			assert.ok(String(build?.options?.cwd || '').includes('${workspaceFolder}/apps/blink'));
 
-			// IntelliSense: project-local + workspace-root c_cpp_properties with absolute SDK path
+			// IntelliSense: project-local c_cpp_properties only (workspace root is not mirrored).
 			const childCpp = JSON.parse(fs.readFileSync(path.join(child, '.vscode', 'c_cpp_properties.json'), 'utf8'));
 			const childCfg = childCpp.configurations[0];
 			assert.ok(childCfg.includePath.some((p: string) => p.includes('/apps/blink/syscfg') || p.includes('${workspaceFolder}/apps/blink/syscfg')));
@@ -111,16 +111,13 @@ suite('ProjectService multi-root and health', () => {
 				childCfg.includePath.some((p: string) => p.replace(/\\/g, '/').includes('mspm0_sdk') && p.replace(/\\/g, '/').endsWith('/source')),
 				`expected absolute SDK include, got: ${JSON.stringify(childCfg.includePath)}`
 			);
-
-			assert.ok(fs.existsSync(path.join(tmpA, '.vscode', 'c_cpp_properties.json')));
-			const wsCpp = JSON.parse(fs.readFileSync(path.join(tmpA, '.vscode', 'c_cpp_properties.json'), 'utf8'));
-			assert.ok(wsCpp.configurations.some((c: any) => String(c.name || '').includes('apps/blink')));
-			const wsSettings = JSON.parse(fs.readFileSync(path.join(tmpA, '.vscode', 'settings.json'), 'utf8'));
-			assert.ok(Array.isArray(wsSettings['C_Cpp.default.includePath']));
 			assert.ok(
-				wsSettings['C_Cpp.default.includePath'].some(
-					(p: string) => p.replace(/\\/g, '/').includes('mspm0_sdk') && p.replace(/\\/g, '/').includes('/source')
-				)
+				!fs.existsSync(path.join(tmpA, '.vscode', 'c_cpp_properties.json')),
+				'nested init must not write workspace-root c_cpp_properties.json'
+			);
+			assert.ok(
+				!fs.existsSync(path.join(tmpA, '.vscode', 'settings.json')),
+				'nested init must not write workspace-root settings.json'
 			);
 
 			const listed = service.listWorkspaceFolders();

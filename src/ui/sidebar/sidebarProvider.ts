@@ -49,7 +49,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		private readonly devices: DeviceRegistry,
 		private readonly workflow: WorkflowService,
 		private readonly statusBar?: StatusBarController,
-		private readonly serial?: SerialService
+		private readonly serial?: SerialService,
+		/** Fired after init/sync/create so IntelliSense provider can refresh. */
+		private readonly onProjectsChanged?: () => void
 	) {
 		const settings = readPluginSettings();
 		if (settings.defaultDevice) {
@@ -414,6 +416,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 			// Keep generated configs in sync for device/probe changes
 			if (partial.device || partial.probe || partial.interface || partial.speed) {
 				await this.projects.syncConfig(this.toolPaths.getPaths());
+				this.onProjectsChanged?.();
 			}
 		}
 		if (partial.device) {
@@ -542,6 +545,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 		await this.pushState();
 		try {
 			await this.projects.initProject(this.targetDraft, this.toolPaths.getPaths(), targetRoot);
+			this.onProjectsChanged?.();
 			this.healthCache = undefined;
 			this.bumpManualProjectPick();
 
@@ -637,6 +641,7 @@ ${root}`,
 		try {
 			this.bumpManualProjectPick();
 			await this.projects.initProject(this.targetDraft, this.toolPaths.getPaths(), root);
+			this.onProjectsChanged?.();
 			this.healthCache = undefined;
 			this.setMessage(`工程初始化完成: ${root}`, 'success');
 			this.statusBar?.setAction('工程已初始化', 'success');
@@ -653,6 +658,7 @@ ${root}`,
 		await this.pushState();
 		try {
 			await this.projects.syncConfig(this.toolPaths.getPaths());
+			this.onProjectsChanged?.();
 			this.setMessage('配置已同步', 'success');
 			this.statusBar?.setAction('配置已同步', 'success');
 		} finally {

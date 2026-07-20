@@ -57,7 +57,7 @@ export interface Mspm0ProjectFile extends TargetConfig {
 export interface DeviceInfo {
 	id: string;
 	series: string;
-	family?: string;
+	/** C preprocessor family define, e.g. DeviceFamily_MSPM0G350X */
 	familyDefine: string;
 	deviceDefine: string;
 	jlinkDevice: string;
@@ -67,7 +67,6 @@ export interface DeviceInfo {
 	linker: string;
 	startup: string;
 	driverlibLib?: string;
-	openocdTarget?: string;
 }
 
 export interface WorkspaceFolderInfo {

@@ -15,4 +15,5 @@ run('npx', [
   'out/test/deviceRegistry.test.js',
   'out/test/projectInit.test.js',
   'out/test/projectHealth.test.js',
+  'out/test/cppConfigurationProvider.test.js',
 ]);

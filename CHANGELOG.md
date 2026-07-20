@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.7.3
+
+- 清理：移除未使用的 `generate(..., workspaceFolderRoot)` 参数与工作区根写入相关残留
+- 清理：删除未使用的 `buildConfigurationForRoot`、`DeviceRegistry.defaultId/seriesList`
+- 清理：类型去掉未使用的 `DeviceInfo.family` / `openocdTarget` 字段
+- 清理：`check-sidebar` 纳入 `verify`；去掉重复的 `test:unit-compile`
+
+## 0.7.2
+
+- 嵌套工程 init/sync **不再**向工作区根写入 `.vscode/c_cpp_properties.json` 与 `.vscode/settings.json`
+- IntelliSense 以 Custom Configuration Provider 为准；工程本地 `.vscode/c_cpp_properties.json` 仍生成（单开该文件夹时有用）
+
+## 0.7.1
+
+- 修复 Custom Configuration Provider：`includePath` 不再依赖 `/**`（对 Provider 不可靠）
+- 按 Makefile 同样方式枚举 `src` 下含 `.h` 的子目录，支持 `#include "board.h"` 等嵌套头文件
+- Provider 使用平台限定 `intelliSenseMode`（如 `windows-gcc-arm`），减少配置被整体判定失败
+
+## 0.7.0
+
+- IntelliSense：注册 C/C++ **Custom Configuration Provider**（`vscode-cpptools`），按源文件所属工程返回 include/defines
+- 多工程 monorepo 下同名 `ti_msp_dl_config.h` 不再互相抢路径；可同时打开多个子工程文件且各自解析正确
+- 嵌套工程同步时，工作区根不再 union `C_Cpp.default.includePath`（避免 ind 错 syscfg）；仍写入命名 `c_cpp_properties` 作为未装/未激活 Provider 时的兜底
+- 依赖：`vscode-cpptools` API；`extensionDependencies` 声明 `ms-vscode.cpptools`
+
 ## 0.6.10
 
 - 构建：Makefile 递归发现 `src/**/*.c`，支持嵌套业务目录（如 `src/Hardware/Src`）

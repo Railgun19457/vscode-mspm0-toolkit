@@ -38,7 +38,13 @@ const vscode = {
   StatusBarAlignment: { Left: 1, Right: 2 },
   ThemeColor: class { constructor(id) { this.id = id; } },
   ConfigurationTarget: { Global: 1, Workspace: 2 },
-  Uri: { file(p) { return { fsPath: p, path: p }; } },
+  Uri: {
+    file(p) { return { fsPath: p, path: p, scheme: 'file' }; },
+    parse(s) {
+      const m = String(s).replace(/^file:\/\//i, '');
+      return { fsPath: m, path: m, scheme: 'file' };
+    },
+  },
 };
 
 module.exports = vscode;
