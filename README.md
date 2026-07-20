@@ -65,7 +65,7 @@ repo/                          ← VS Code 工作区根
 
 | 操作 | 说明 |
 | ---- | ---- |
-| 工程列表 | 侧边栏以卡片列出已发现工程（相对路径 + 芯片 + 当前高亮）；未初始化的工作区根仅在尚无子工程或当前选中时显示 |
+| 工程列表 | 侧边栏以卡片列出已发现工程（相对路径 + 芯片 + 当前高亮） |
 | **选择文件夹** | 在工作区内指定任意子文件夹作为活动工程根（可先选再初始化） |
 | **刷新列表** | 重新扫描工作区内的 `mspm0.project.json` |
 | 点击卡片 | 切换活动工程；构建 / 烧录 / 调试均针对当前工程 |
@@ -76,7 +76,6 @@ repo/                          ← VS Code 工作区根
 
 - `launch.json` / `tasks.json` 等写在**子工程** `.vscode`，路径使用 `${workspaceFolder}/相对路径`
 - IntelliSense 由扩展向 C/C++ 提供 **按文件所属工程** 的配置（Custom Configuration Provider），多工程同名 `ti_msp_dl_config.h` 可正确解析
-- **不再**向工作区根写入 `c_cpp_properties.json` / `settings.json`；工程本地仍生成 `c_cpp_properties.json`（将该文件夹单独打开时有用）
 
 ## 界面说明
 
