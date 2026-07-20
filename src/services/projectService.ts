@@ -51,8 +51,11 @@ export class ProjectService {
 
 	/**
 	 * List selectable project roots for the sidebar:
-	 * - every VS Code workspace folder
-	 * - every nested directory that already contains mspm0.project.json
+	 * - initialized projects (workspace-root and/or nested `mspm0.project.json`)
+	 * - the active root when set (even if not yet initialized)
+	 * - uninitialized workspace-folder roots only when no initialized project exists
+	 *   (placeholder for first init / create), so monorepos with only nested apps
+	 *   do not show a permanent "○ workspace root" row.
 	 *
 	 * Continues scanning under initialized parents so sibling/nested projects
 	 * (e.g. apps/a, apps/b under a workspace that itself has a project file) are found.
@@ -60,18 +63,33 @@ export class ProjectService {
 	listWorkspaceFolders(): WorkspaceFolderInfo[] {
 		const folders = vscode.workspace.workspaceFolders ?? [];
 		const byPath = new Map<string, WorkspaceFolderInfo>();
+		/** Uninitialized workspace roots kept only as empty-workspace placeholders. */
+		const uninitWorkspaceRoots: WorkspaceFolderInfo[] = [];
+
+		const activeAbs = this.activeRoot ? normalizeRoot(this.activeRoot) : undefined;
+		const activeKey = activeAbs ? pathKey(activeAbs) : undefined;
 
 		for (const f of folders) {
 			const abs = normalizeRoot(f.uri.fsPath);
 			const rootKey = pathKey(abs);
-			byPath.set(rootKey, this.enrichProjectInfo({
+			const rootInitialized = this.isInitialized(abs);
+			const rootInfo = this.enrichProjectInfo({
 				name: f.name,
 				path: abs,
-				initialized: this.isInitialized(abs),
+				initialized: rootInitialized,
 				relativePath: '.',
 				isWorkspaceRoot: true,
 				workspaceFolder: abs,
-			}));
+			});
+
+			// Always list an initialized workspace-root project.
+			// Uninitialized roots are deferred unless they are the active selection
+			// or needed as an empty-workspace placeholder (see below).
+			if (rootInitialized || (activeKey !== undefined && activeKey === rootKey)) {
+				byPath.set(rootKey, rootInfo);
+			} else {
+				uninitWorkspaceRoots.push(rootInfo);
+			}
 
 			for (const proj of this.scanProjectsUnder(abs, f.name)) {
 				const key = pathKey(proj.path);
@@ -95,22 +113,31 @@ export class ProjectService {
 		}
 
 		// Ensure the currently selected root appears even if not yet initialized / not scanned.
-		if (this.activeRoot) {
-			const abs = normalizeRoot(this.activeRoot);
-			const key = pathKey(abs);
-			if (!byPath.has(key) && this.isPathInsideWorkspace(abs) && pathExists(abs)) {
-				const ws = this.getContainingWorkspaceFolder(abs);
-				const rel = ws
-					? path.relative(ws.uri.fsPath, abs).replace(/\\/g, '/') || '.'
-					: path.basename(abs);
-				byPath.set(key, this.enrichProjectInfo({
-					name: rel === '.' ? path.basename(abs) : rel,
-					path: abs,
-					initialized: this.isInitialized(abs),
-					relativePath: rel,
-					isWorkspaceRoot: false,
-					workspaceFolder: ws ? normalizeRoot(ws.uri.fsPath) : undefined,
-				}));
+		if (activeAbs && activeKey && !byPath.has(activeKey) && this.isPathInsideWorkspace(activeAbs) && pathExists(activeAbs)) {
+			const ws = this.getContainingWorkspaceFolder(activeAbs);
+			const rel = ws
+				? path.relative(ws.uri.fsPath, activeAbs).replace(/\\/g, '/') || '.'
+				: path.basename(activeAbs);
+			const isRoot = !!ws && pathKey(ws.uri.fsPath) === activeKey;
+			byPath.set(activeKey, this.enrichProjectInfo({
+				name: rel === '.' ? path.basename(activeAbs) : rel,
+				path: activeAbs,
+				initialized: this.isInitialized(activeAbs),
+				relativePath: rel,
+				isWorkspaceRoot: isRoot,
+				workspaceFolder: ws ? normalizeRoot(ws.uri.fsPath) : undefined,
+			}));
+		}
+
+		// Empty workspace (no initialized project at all): show uninitialized workspace
+		// folder roots so the user has a target for init / create.
+		const hasInitialized = Array.from(byPath.values()).some((p) => p.initialized);
+		if (!hasInitialized) {
+			for (const root of uninitWorkspaceRoots) {
+				const key = pathKey(root.path);
+				if (!byPath.has(key)) {
+					byPath.set(key, root);
+				}
 			}
 		}
 
@@ -119,7 +146,6 @@ export class ProjectService {
 			if (a.initialized !== b.initialized) {
 				return a.initialized ? -1 : 1;
 			}
-			// Prefer non-workspace-root entries when both initialized? Keep stable name sort.
 			return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
 		});
 	}

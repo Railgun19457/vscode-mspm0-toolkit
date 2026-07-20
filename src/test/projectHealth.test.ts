@@ -122,6 +122,46 @@ suite('ProjectService multi-root and health', () => {
 
 			const listed = service.listWorkspaceFolders();
 			assert.ok(listed.some((p) => path.normalize(p.path) === path.normalize(child) && p.initialized));
+			// Uninitialized workspace root is hidden when nested projects exist.
+			assert.ok(
+				!listed.some((p) => path.normalize(p.path) === path.normalize(tmpA)),
+				'uninitialized workspace root should not appear when nested projects exist'
+			);
+		} finally {
+			vscode.workspace.workspaceFolders = undefined;
+		}
+	});
+
+	test('list hides uninitialized workspace root when nested projects exist', async () => {
+		const vscode = require('./mocks/vscode');
+		const p1 = path.join(tmpA, 'test1');
+		const p2 = path.join(tmpA, 'test2');
+		fs.mkdirSync(p1, { recursive: true });
+		fs.mkdirSync(p2, { recursive: true });
+		vscode.workspace.workspaceFolders = [
+			{ name: 'repo', uri: { fsPath: tmpA, path: tmpA } },
+		];
+		try {
+			// Empty: root shown as init placeholder
+			let listed = service.listWorkspaceFolders();
+			assert.ok(listed.some((p) => path.normalize(p.path) === path.normalize(tmpA)));
+			assert.ok(listed.every((p) => !p.initialized || path.normalize(p.path) === path.normalize(tmpA)));
+
+			await service.initProject({ ...DEFAULT_TARGET, target: 'a' }, tools, p1);
+			await service.initProject({ ...DEFAULT_TARGET, target: 'b' }, tools, p2);
+			service.setWorkspaceRoot(p1);
+
+			listed = service.listWorkspaceFolders();
+			assert.ok(listed.some((p) => path.normalize(p.path) === path.normalize(p1) && p.initialized));
+			assert.ok(listed.some((p) => path.normalize(p.path) === path.normalize(p2) && p.initialized));
+			assert.ok(
+				!listed.some((p) => path.normalize(p.path) === path.normalize(tmpA)),
+				'workspace root without mspm0.project.json must not clutter list'
+			);
+
+			// Selecting the workspace root explicitly still shows it.
+			service.setWorkspaceRoot(tmpA);
+			listed = service.listWorkspaceFolders();
 			assert.ok(listed.some((p) => path.normalize(p.path) === path.normalize(tmpA)));
 		} finally {
 			vscode.workspace.workspaceFolders = undefined;
