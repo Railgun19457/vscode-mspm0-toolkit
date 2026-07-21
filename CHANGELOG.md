@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.5
+
+- 构建：Windows 上强制 `SHELL=cmd.exe`，目录创建/清理用 `if not exist` / `rmdir`（适配 mingw32-make CreateProcess）
+- 构建：非 Windows 仍用 `mkdir -p` / `rm -rf`
+- 构建：工具链与 SDK 路径在配方中加引号，支持 `GNU Arm Embedded Toolchain` 等含空格路径
+- 构建：嵌套 `-I` 目录与 map/`-L` 路径同步加引号
+
 ## 0.7.4
 
 - 工程列表：工作区根仅在「根已初始化 / 当前选中 / 工作区尚无任何工程」时显示

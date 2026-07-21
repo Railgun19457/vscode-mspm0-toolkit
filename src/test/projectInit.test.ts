@@ -72,6 +72,23 @@ suite('ProjectService.initProject', () => {
 		assert.ok(mk.includes('-include app.mk'), 'Makefile should allow optional app.mk extras');
 		assert.ok(mk.includes('EXTRA_INCLUDES'), 'Makefile should wire EXTRA_INCLUDES into CFLAGS');
 		assert.ok(!mk.includes('SRCS := src/main.c'), 'Makefile should not hardcode only flat src/main.c');
+		// Windows mingw32-make often uses cmd/CreateProcess: force cmd recipes on Windows_NT
+		assert.ok(mk.includes('ifeq ($(OS),Windows_NT)'), 'Makefile should branch on Windows_NT');
+		assert.ok(mk.includes('SHELL := cmd.exe'), 'Windows should force cmd.exe shell');
+		assert.ok(mk.includes('MKDIR_OBJ'), 'Makefile should define MKDIR_OBJ helper');
+		assert.ok(mk.includes('RM_BUILD'), 'Makefile should define RM_BUILD helper');
+		assert.ok(mk.includes('@$(MKDIR_OBJ)'), 'object rule should use MKDIR_OBJ');
+		assert.ok(mk.includes('@$(RM_BUILD)'), 'clean should use RM_BUILD');
+		assert.ok(mk.includes('if not exist'), 'Windows branch should use cmd if not exist');
+		assert.ok(mk.includes('rmdir /S /Q'), 'Windows branch should use rmdir');
+		assert.ok(mk.includes('mkdir -p'), 'non-Windows branch should use mkdir -p');
+		assert.ok(mk.includes('rm -rf'), 'non-Windows branch should use rm -rf');
+		// Quote tool/SDK paths so "GNU Arm Embedded Toolchain" etc. work
+		assert.ok(mk.includes('@"$(CC)"'), 'compile/link should quote CC for paths with spaces');
+		assert.ok(mk.includes('-I"$(SDK)/source"'), 'CFLAGS should quote SDK include path');
+		assert.ok(mk.includes('-I"$(GCC_PATH)/arm-none-eabi/include"'), 'CFLAGS should quote GCC include path');
+		assert.ok(mk.includes('-L"$(SDK)/source"'), 'LDFLAGS should quote SDK lib path');
+		assert.ok(mk.includes('$(foreach d,$(SRC_INCDIRS),-I"$(d)")'), 'nested -I dirs should be quoted');
 		const proj = JSON.parse(fs.readFileSync(path.join(tmp, 'mspm0.project.json'), 'utf8'));
 		assert.strictEqual(proj.device, 'MSPM0G3507');
 		assert.strictEqual(proj.version, 1);
@@ -96,7 +113,7 @@ suite('ProjectService.initProject', () => {
 		const mk = fs.readFileSync(path.join(tmp, 'Makefile'), 'utf8');
 		assert.ok(mk.includes('APP_SRCS := $(call rwildcard,src/,*.c)'));
 		assert.ok(mk.includes('SRC_INCDIRS := $(sort $(dir $(SRC_HDRS)))'));
-		assert.ok(mk.includes('$(addprefix -I,$(SRC_INCDIRS))'));
+		assert.ok(mk.includes('$(foreach d,$(SRC_INCDIRS),-I"$(d)")'));
 		assert.ok(mk.includes('$(EXTRA_SRCS)'));
 		// app.mk itself is not rewritten by sync
 		assert.ok(fs.existsSync(path.join(tmp, 'app.mk')));

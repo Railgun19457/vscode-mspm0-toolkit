@@ -2,7 +2,7 @@
   "name": "mspm0-toolkit",
   "displayName": "MSPM0 Toolkit",
   "description": "TI MSPM0 full-workflow toolkit for VS Code: sidebar console, toolchain setup, project init, build, flash, debug, SysConfig",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "publisher": "Railgun19457",
   "engines": {
     "vscode": "^1.85.0"
