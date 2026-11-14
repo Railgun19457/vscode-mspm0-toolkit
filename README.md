@@ -241,6 +241,7 @@ npm run verify
 `npm run verify` 包含：
 
 - `npm run compile`
+- `npm run check-sidebar`
 - `npm run test:unit`
 - `npm run smoke`
 
@@ -249,3 +250,11 @@ npm run verify
 ```bash
 npx @vscode/vsce package --no-dependencies --allow-missing-repository
 ```
+
+## 发布
+
+在 Visual Studio Marketplace 的发布者 `Railgun19457` 下创建 **Trusted Publishing** 策略。Repository owner 填 `Railgun19457`，Repository 填 `vscode-mspm0-toolkit`，Workflow 填 `publish.yml`，Environment 留空。[发布者管理后台](https://marketplace.visualstudio.com/manage/publishers/Railgun19457)
+
+更新并提交 `package.json` 和 `package-lock.json` 的版本后，推送 `v0.7.6` 这样的标签发布正式版，或推送 `v0.7.6-beta.1` 这样的标签发布 Beta。Marketplace 上的每次发布都需要独立的数字版本。
+
+**Publish extension** 会运行 `npm run verify`，构建一次 VSIX，并分发到 Marketplace 和 GitHub Releases。在 Actions 页手动运行时，只执行检查和打包，生成的 VSIX 可在运行结果中下载。

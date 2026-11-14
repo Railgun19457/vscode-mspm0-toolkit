@@ -7,6 +7,8 @@ src/**
 dev/**
 scripts/**
 .git/**
+.github/**
+package-lock.json
 **/*.vsix
 _*.py
 *.log

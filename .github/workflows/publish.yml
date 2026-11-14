@@ -1,0 +1,172 @@
+name: Publish extension
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Channel to build for verification
+        type: choice
+        options:
+          - beta
+          - stable
+        default: beta
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-extension-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      package: ${{ steps.version.outputs.package }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      artifact-id: ${{ steps.artifact.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Validate version and select channel
+        id: version
+        shell: bash
+        env:
+          CHECK_CHANNEL: ${{ inputs.channel }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          lock_versions=$(node -p "const lock = require('./package-lock.json'); lock.version + ' ' + lock.packages[''].version")
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || "$lock_versions" != "$version $version" ]]; then
+            echo "::error::package.json and package-lock.json must have the same numeric version"
+            exit 1
+          fi
+
+          tag="$GITHUB_REF_NAME"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            tag="v$version"
+            if [[ "$CHECK_CHANNEL" == beta ]]; then
+              tag="$tag-beta.1"
+            fi
+          fi
+
+          prerelease=false
+          if [[ "$tag" =~ -beta\.[0-9]+$ && "${tag%-beta.*}" == "v$version" ]]; then
+            prerelease=true
+          elif [[ "$tag" != "v$version" ]]; then
+            echo "::error::Tag $tag does not match package version $version"
+            exit 1
+          fi
+
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "package=mspm0-toolkit-${tag#v}.vsix" >> "$GITHUB_OUTPUT"
+      - run: npm ci
+      - run: npm run verify
+      - name: Package VSIX
+        shell: bash
+        env:
+          PACKAGE: ${{ steps.version.outputs.package }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          flags=()
+          if [[ "$PRERELEASE" == true ]]; then
+            flags+=(--pre-release)
+          fi
+          node node_modules/@vscode/vsce/vsce package \
+            --no-dependencies \
+            "${flags[@]}" --out "$PACKAGE"
+      - name: Upload VSIX
+        id: artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.version.outputs.package }}
+          path: ${{ steps.version.outputs.package }}
+          if-no-files-found: error
+          overwrite: true
+
+  publish:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      PACKAGE: ${{ needs.build.outputs.package }}
+      PRERELEASE: ${{ needs.build.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+      - name: Prepare GitHub release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --json isDraft >/dev/null; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes \
+              --draft --prerelease="$PRERELEASE"
+          fi
+
+          release=$(gh release view "$GITHUB_REF_NAME" --json isDraft,isPrerelease,assets)
+          draft=$(jq -r '.isDraft' <<< "$release")
+          if [[ "$(jq -r '.isPrerelease' <<< "$release")" != "$PRERELEASE" ]]; then
+            echo "::error::The existing GitHub release uses a different channel"
+            exit 1
+          fi
+
+          asset=$(jq -c --arg name "$PACKAGE" '.assets[] | select(.name == $name)' <<< "$release")
+          if [[ "$draft" == true && "$(jq -r '.state' <<< "$asset")" == starter ]]; then
+            gh release delete-asset "$GITHUB_REF_NAME" "$PACKAGE" --yes
+            asset=
+          fi
+
+          if [[ -z "$asset" && "$draft" == true ]]; then
+            gh release upload "$GITHUB_REF_NAME" "$PACKAGE"
+          else
+            expected="sha256:$(sha256sum "$PACKAGE" | cut -d ' ' -f 1)"
+            if [[ "$(jq -r '.digest' <<< "$asset")" != "$expected" ]]; then
+              echo "::error::The existing GitHub release does not contain the expected VSIX"
+              exit 1
+            fi
+          fi
+
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+      - name: Publish to Visual Studio Marketplace
+        shell: bash
+        run: |
+          flags=()
+          if [[ "$PRERELEASE" == true ]]; then
+            flags+=(--pre-release)
+          fi
+          node node_modules/@vscode/vsce/vsce publish \
+            --oidc --skip-duplicate "${flags[@]}" --packagePath "$PACKAGE"
+      - name: Publish GitHub release
+        if: steps.release.outputs.draft == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$PRERELEASE" == true ]]; then
+            gh release edit "$GITHUB_REF_NAME" --draft=false --latest=false
+          else
+            gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          fi
