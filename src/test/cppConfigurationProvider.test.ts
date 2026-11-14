@@ -10,20 +10,22 @@ import { ProjectService } from '../services/projectService';
 import { ToolPathService } from '../services/toolPathService';
 
 suite('CppConfigurationProvider / source-file IntelliSense', () => {
-	const tools: ToolPaths = {
-		gcc: 'D:/arm-gnu-toolchain',
-		sdk: 'D:/TI/mspm0_sdk_2_05_01_00',
-		sysconfig: 'D:/TI/sysconfig',
-		jlink: 'D:/JLink/JLink_V854',
-		make: 'D:/mingw64/bin',
-		openocd: 'D:/OpenOCD/bin',
-	};
 	let tmp = '';
+	let tools: ToolPaths;
 	let service: ProjectService;
 	let gen: ConfigGenerator;
 
 	setup(() => {
 		tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mspm0-cpp-'));
+		tools = {
+			gcc: path.join(tmp, 'arm-gnu-toolchain'),
+			sdk: path.join(tmp, 'mspm0_sdk'),
+			sysconfig: path.join(tmp, 'sysconfig'),
+			jlink: path.join(tmp, 'jlink'),
+			make: path.join(tmp, 'make', 'bin'),
+			openocd: path.join(tmp, 'openocd', 'bin'),
+		};
+		fs.mkdirSync(path.join(tools.sdk, 'source'), { recursive: true });
 		const extRoot = path.resolve(__dirname, '../..');
 		gen = new ConfigGenerator();
 		service = new ProjectService(extRoot, new DeviceRegistry(extRoot), gen);

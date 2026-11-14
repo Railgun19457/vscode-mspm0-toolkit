@@ -128,8 +128,10 @@ $(BUILD)/$(TARGET).out: $(OBJS) linker/device.lds
 \t@$(CC) $(OBJS) $(LDFLAGS) -o $@
 $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).out
 \t@$(OBJCOPY) -O ihex $< $@
+$(OBJS): | $(sort $(dir $(OBJS)))
+$(sort $(dir $(OBJS))):
+\t@if not exist $(subst /,\\,$@) mkdir $(subst /,\\,$@)
 $(BUILD)/%.o: %.c
-\t@if not exist $(subst /,\\,$(dir $@)) mkdir $(subst /,\\,$(dir $@))
 \t@$(CC) $(CFLAGS) -c $< -o $@
 size: $(BUILD)/$(TARGET).out
 \t@$(SIZE) $<
