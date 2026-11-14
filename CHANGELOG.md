@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.6
+
+- 通过 GitHub Actions 自动构建 VSIX，并同步发布到 Visual Studio Marketplace 和 GitHub Releases。
+- 测试使用临时 SDK 目录，并修复固件编译冒烟测试中并行创建目录的冲突。
+
 ## 0.7.5
 
 - 构建：Windows 上强制 `SHELL=cmd.exe`，目录创建/清理用 `if not exist` / `rmdir`（适配 mingw32-make CreateProcess）
